@@ -1,0 +1,14 @@
+{
+  "name": "host-aircraft-service",
+  "version": "1.0.0",
+  "description": "Service to generate host aircraft data",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.17.1",
+    "ws": "^8.13.0"
+  }
+}

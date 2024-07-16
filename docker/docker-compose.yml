@@ -1,0 +1,12 @@
+version: "3"
+services:
+  host-aircraft:
+    build: ./host-aircraft
+    ports:
+      - "8080:8080"
+      - "8090:8090"
+  other-aircraft:
+    build: ./other-aircraft
+    ports:
+      - "8081:8081"
+      - "8091:8091"
