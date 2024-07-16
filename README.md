@@ -1,13 +1,56 @@
-# Aircraft Tracking System
+# Aircraft Tracking Simulation
 
-This project implements a real-time aircraft tracking system using Angular, Material, Tailwind, and OpenLayers.
+This project simulates aircraft tracking with a host aircraft and multiple other aircraft.
+
+## Prerequisites
+
+- Node.js (v14+)
+- Docker
+- Angular CLI
+
+## Setup
+
+1. Clone the repository
+2. Install dependencies:
+   ```
+   npm install
+   cd web-app && npm install
+   ```
+
+## Running the Application
+
+1. Start the backend services:
+
+   ```
+   cd docker
+   docker-compose up -d
+   ```
+
+2. Start the Angular app:
+
+   ```
+   cd web-app
+   ng serve
+   ```
+
+3. Open http://localhost:4200 in your browser
 
 ## Project Structure
 
-- `docker/`: Contains Dockerfiles and docker-compose configuration
-- `web-app/`: Angular application
-- `shared/`: Shared TypeScript types and utilities
+- `docker/`: Contains backend services
+- `web-app/`: Angular frontend application
+- `shared/`: Shared TypeScript types
 
-## Getting Started
+## Development
 
-(Add instructions for setting up and running the project)
+- Backend services: Edit files in `docker/` directories
+- Frontend: Modify Angular components in `web-app/src/app/`
+
+## Stopping the Application
+
+1. Stop the Angular app: Ctrl+C in the terminal running `ng serve`
+2. Stop backend services:
+   ```
+   cd docker
+   docker-compose down
+   ```
