@@ -1,0 +1,13 @@
+{
+  "options": {
+    "paths": {
+      "root": "/path/to/your/tiles"
+    }
+  },
+  "styles": {},
+  "data": {
+    "v3": {
+      "mbtiles": "/path/to/your/tiles.mbtiles"
+    }
+  }
+}
