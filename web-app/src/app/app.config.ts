@@ -6,7 +6,9 @@ import { provideAnimationsAsync } from '@angular/platform-browser/animations/asy
 import { provideHttpClient } from '@angular/common/http';
 import { HostAircraftService } from './services/host-aircraft.service';
 import { OtherAircraftService } from './services/other-aircraft.service';
+import { provideAnimations } from '@angular/platform-browser/animations';
+
 
 export const appConfig: ApplicationConfig = {
-  providers: [provideRouter(routes), provideAnimationsAsync(), provideHttpClient(), HostAircraftService, OtherAircraftService]
+  providers: [provideRouter(routes), provideAnimationsAsync(), provideHttpClient(), provideAnimations(), HostAircraftService, OtherAircraftService]
 };

@@ -1,6 +1,6 @@
 
 import { Component, OnInit, OnDestroy } from '@angular/core';
-import { Map, View } from 'ol';
+import { Map as OLMap, View } from 'ol';
 import { fromLonLat } from 'ol/proj';
 import Feature, { FeatureLike } from 'ol/Feature';
 import Point from 'ol/geom/Point';
@@ -16,23 +16,25 @@ import { Subscription } from 'rxjs';
 import { AircraftData, HostAircraftService } from '../services/host-aircraft.service';
 import { OtherAircraftData, OtherAircraftService } from '../services/other-aircraft.service';
 import { Coordinate } from 'ol/coordinate';
+import { MatButtonModule } from '@angular/material/button';
+import { MatIconModule } from '@angular/material/icon';
 
+
+enum CenteringMode {
+  None,
+  Center,
+  CenterWithHeading
+}
 
 @Component({
   selector: 'app-map',
   standalone: true,
-  imports: [CommonModule],
-  template: '<div id="map" class="map"></div>',
-  styles: [`
-    .map {
-      width: 100%;
-      height: 100vh;
-      background-color: #000033;
-    }
-  `]
+  imports: [CommonModule, MatButtonModule, MatIconModule],
+  templateUrl: './map.component.html',
+  styleUrl: './map.component.scss'
 })
 export class MapComponent implements OnInit, OnDestroy {
-  private map!: Map;
+  private map!: OLMap;
   private vectorLayer!: VectorLayer<Feature<Geometry>>;
   private hostAircraftLayer!: VectorLayer<Feature<Geometry>>;
   private otherAircraftLayer!: WebGLPointsLayer<VectorSource<FeatureLike>>;
@@ -42,6 +44,9 @@ export class MapComponent implements OnInit, OnDestroy {
   private lastHostPosition: Coordinate | null = null;
   private lastHostHeading: number | null = null;
   private hostFeature: Feature<Point> | null = null;
+  public isCentered: boolean = true;
+  private centeringMode: CenteringMode = CenteringMode.CenterWithHeading;
+  public centeringIcon: string = 'navigation';
 
   constructor(
     private hostAircraftService: HostAircraftService,
@@ -60,8 +65,21 @@ export class MapComponent implements OnInit, OnDestroy {
   }
 
   private initMap() {
+
+    let previousZoom = -1; // Holds the previous zoom level
+
     const vectorSource110m = new VectorSource({
       url: 'assets/maps/ne_110m_admin_0_countries.json',
+      format: new GeoJSON(),
+    });
+
+    const vectorSource50m = new VectorSource({
+      url: 'assets/maps/ne_50m_admin_0_countries.json',
+      format: new GeoJSON(),
+    });
+
+    const vectorSource10m = new VectorSource({
+      url: 'assets/maps/ne_10m_admin_0_countries.json',
       format: new GeoJSON(),
     });
 
@@ -79,7 +97,7 @@ export class MapComponent implements OnInit, OnDestroy {
       }),
     });
 
-    this.map = new Map({
+    this.map = new OLMap({
       target: 'map',
       layers: [this.vectorLayer],
       controls: defaultControls({
@@ -93,8 +111,36 @@ export class MapComponent implements OnInit, OnDestroy {
       }),
     });
 
+    this.map.on('postrender', () => {
+      if (this.hostFeature) {
+        const mapRotation = this.map.getView().getRotation();
+        const style = this.hostFeature.getStyle() as Style;
+        (style.getImage() as Icon).setRotation(this.lastHostHeading! * Math.PI / 180 + mapRotation);
+        this.map.render();
+      }
+    });
+
+    // Add event listener for when the map stops moving
+    this.map.on('moveend', () => {
+
+      const currentZoom = this.map.getView().getZoom();
+
+      if (currentZoom !== previousZoom) {
+        previousZoom = currentZoom!;
+
+        // Determine which resolution to show based on the zoom level
+        if (currentZoom! <= 6) {
+          this.vectorLayer.setSource(vectorSource110m);
+        } else if (currentZoom! > 6 && currentZoom! <= 10) {
+          this.vectorLayer.setSource(vectorSource50m);
+        } else if (currentZoom! > 10) {
+          this.vectorLayer.setSource(vectorSource10m);
+        }
+      }
+    });
+
     this.hostAircraftLayer = new VectorLayer({
-      source: new VectorSource()
+      source: new VectorSource(),
     });
 
     this.map.addLayer(this.hostAircraftLayer);
@@ -104,8 +150,8 @@ export class MapComponent implements OnInit, OnDestroy {
       source: new VectorSource(),
       style: {
         'icon-src': 'assets/other-aircraft.svg',
-        'icon-width': 28,
-        'icon-height': 28,
+        'icon-width': 25,
+        'icon-height': 25,
         'icon-size': ['interpolate', ['linear'], ['get', 'size'], 0, 0, 20, 28],
         'icon-rotate-with-view': true,
         'icon-rotation': ['get', 'heading'],  // This line sets the rotation
@@ -145,7 +191,7 @@ export class MapComponent implements OnInit, OnDestroy {
         image: new Icon({
           src: 'assets/host-aircraft.svg',
           scale: 0.5,
-          rotation: data.heading * Math.PI / 180
+          rotation: 0  // We'll update this in the animation
         })
       }));
       source.addFeature(this.hostFeature);
@@ -156,7 +202,7 @@ export class MapComponent implements OnInit, OnDestroy {
       const startHeading = this.lastHostHeading!;
       const endPosition = newPosition;
       const endHeading = data.heading;
-      const duration = 1000; // Duration of animation in milliseconds
+      const duration = 100;
       const startTime = performance.now();
 
       const animate = (currentTime: number) => {
@@ -170,19 +216,28 @@ export class MapComponent implements OnInit, OnDestroy {
 
         // Interpolate heading
         let headingDiff = endHeading - startHeading;
-        // Ensure we rotate the shorter way around
         if (headingDiff > 180) headingDiff -= 360;
         if (headingDiff < -180) headingDiff += 360;
         const currentHeading = startHeading + fraction * headingDiff;
 
+        // Update icon rotation based on current heading and map rotation
+        const mapRotation = this.map.getView().getRotation();
         const style = this.hostFeature!.getStyle() as Style;
-        (style.getImage() as Icon).setRotation(currentHeading * Math.PI / 180);
+        (style.getImage() as Icon).setRotation(currentHeading * Math.PI / 180 + mapRotation);
 
         if (fraction < 1) {
           requestAnimationFrame(animate);
         } else {
           this.lastHostPosition = endPosition;
           this.lastHostHeading = endHeading;
+
+          // Only update map center after animation completes
+          if (this.centeringMode !== CenteringMode.None) {
+            this.smoothCenter(endPosition);
+            if (this.centeringMode === CenteringMode.CenterWithHeading) {
+              this.map.getView().setRotation(-endHeading * Math.PI / 180);
+            }
+          }
         }
         this.map.render();
       };
@@ -190,9 +245,20 @@ export class MapComponent implements OnInit, OnDestroy {
       requestAnimationFrame(animate);
     }
 
-    // Center map on host aircraft only for the first update
-    if (this.firstHostUpdate) {
+    if (this.centeringMode !== CenteringMode.None) {
       this.map.getView().setCenter(newPosition);
+      if (this.centeringMode === CenteringMode.CenterWithHeading) {
+        this.map.getView().setRotation(-data.heading * Math.PI / 180);
+      }
+    }
+
+    // Update the host aircraft icon rotation even when not animating
+    const mapRotation = this.map.getView().getRotation();
+    const style = this.hostFeature!.getStyle() as Style;
+    (style.getImage() as Icon).setRotation(data.heading * Math.PI / 180 + mapRotation);
+
+
+    if (this.firstHostUpdate) {
       this.map.getView().setZoom(7);
       this.firstHostUpdate = false;
     }
@@ -209,14 +275,14 @@ export class MapComponent implements OnInit, OnDestroy {
       if (!feature) {
         feature = new Feature({
           geometry: new Point(fromLonLat([aircraft.longitude, aircraft.latitude])),
-          heading: (aircraft.heading - 90) * Math.PI / 180, // Subtract 90 degrees and convert to radians
+          heading: (aircraft.heading) * Math.PI / 180,
         });
         feature.setId(id);
         source.addFeature(feature);
       } else {
         const geometry = feature.getGeometry() as Point;
         geometry.setCoordinates(fromLonLat([aircraft.longitude, aircraft.latitude]));
-        feature.set('heading', (aircraft.heading) * Math.PI / 180, true); // Subtract 90 degrees and convert to radians
+        feature.set('heading', (aircraft.heading) * Math.PI / 180, true);
       }
 
       existingIds.delete(id);
@@ -233,6 +299,17 @@ export class MapComponent implements OnInit, OnDestroy {
     this.map.render();
   }
 
+  private smoothCenter(newCenter: Coordinate) {
+    const view = this.map.getView();
+    const currentCenter = view.getCenter()!;
+    const duration = 100; // match this with the aircraft animation duration
+
+    view.animate({
+      center: newCenter,
+      duration: duration
+    });
+  }
+
   resetPositions() {
     this.hostAircraftService.resetPosition().subscribe(() => {
       console.log('Host aircraft reset');
@@ -241,251 +318,41 @@ export class MapComponent implements OnInit, OnDestroy {
       console.log('Other aircraft reset');
     });
   }
+
+  toggleCentering() {
+    switch (this.centeringMode) {
+      case CenteringMode.None:
+        this.centeringMode = CenteringMode.Center;
+        this.centeringIcon = 'gps_fixed';
+        break;
+      case CenteringMode.Center:
+        this.centeringMode = CenteringMode.CenterWithHeading;
+        this.centeringIcon = 'navigation';
+        break;
+      case CenteringMode.CenterWithHeading:
+        this.centeringMode = CenteringMode.None;
+        this.centeringIcon = 'gps_off';
+        this.map.getView().setRotation(0);
+        break;
+    }
+
+    if (this.centeringMode !== CenteringMode.None && this.hostFeature) {
+      const geometry = this.hostFeature.getGeometry() as Point;
+      this.smoothCenter(geometry.getCoordinates());
+      if (this.centeringMode === CenteringMode.CenterWithHeading) {
+        const newRotation = -this.lastHostHeading! * Math.PI / 180;
+        this.map.getView().setRotation(newRotation);
+
+        // Update host aircraft icon rotation
+        const style = this.hostFeature.getStyle() as Style;
+        (style.getImage() as Icon).setRotation(this.lastHostHeading! * Math.PI / 180 + newRotation);
+      } else {
+        // Reset host aircraft icon rotation when not in CenterWithHeading mode
+        const style = this.hostFeature.getStyle() as Style;
+        (style.getImage() as Icon).setRotation(this.lastHostHeading! * Math.PI / 180);
+      }
+    }
+  }
+
+
 }
-
-
-// import { Component, OnInit, OnDestroy } from '@angular/core';
-// import { Map, View } from 'ol';
-// import { fromLonLat } from 'ol/proj';
-// import Feature from 'ol/Feature';
-// import Point from 'ol/geom/Point';
-// import { defaults as defaultControls } from 'ol/control';
-// import { Style, Icon, Stroke, Fill } from 'ol/style';
-// import { CommonModule } from '@angular/common';
-// import VectorLayer from 'ol/layer/Vector';
-// import VectorSource from 'ol/source/Vector';
-// import { Geometry } from 'ol/geom';
-// import GeoJSON from 'ol/format/GeoJSON';
-// import { easeOut } from 'ol/easing';
-
-
-
-// import { Subscription } from 'rxjs';
-// import { AircraftData, HostAircraftService } from '../services/host-aircraft.service';
-// import { OtherAircraftData, OtherAircraftService } from '../services/other-aircraft.service';
-// import { unByKey } from 'ol/Observable';
-// import BaseEvent from 'ol/events/Event';
-// import { Coordinate } from 'ol/coordinate';
-
-// @Component({
-//   selector: 'app-map',
-//   standalone: true,
-//   imports: [CommonModule],
-//   template: '<div id="map" class="map"></div>',
-//   styles: [
-//     `
-//     .map {
-//       width: 100%;
-//       height: 100vh;
-//       background-color: #000033; /* Dark blue background for oceans */
-//     }
-//     `
-//   ]
-// })
-// export class MapComponent implements OnInit, OnDestroy {
-//   private map!: Map;
-//   private vectorLayer!: VectorLayer<Feature<Geometry>>;
-//   private hostAircraftLayer!: VectorLayer<Feature<Geometry>>;
-//   private otherAircraftLayer!: VectorLayer<Feature<Geometry>>;
-//   private hostSubscription!: Subscription;
-//   private otherSubscription!: Subscription;
-//   private firstHostUpdate = true;
-//   private lastHostPosition: Coordinate | null = null;
-//   private lastHostHeading: number | null = null;
-//   private hostFeature: Feature<Point> | null = null;
-
-//   constructor(
-//     private hostAircraftService: HostAircraftService,
-//     private otherAircraftService: OtherAircraftService
-//   ) { }
-
-//   ngOnInit() {
-//     this.resetPositions()
-//     this.initMap();
-//     this.subscribeToAircraftData();
-//   }
-
-//   ngOnDestroy() {
-//     this.hostSubscription.unsubscribe();
-//     this.otherSubscription.unsubscribe();
-//   }
-
-//   private initMap() {
-// const vectorSource110m = new VectorSource({
-//   url: 'assets/maps/ne_110m_admin_0_countries.json',
-//   format: new GeoJSON(),
-// });
-
-// this.vectorLayer = new VectorLayer({
-//   source: vectorSource110m,
-//   renderBuffer: 10000,
-//   style: new Style({
-//     stroke: new Stroke({
-//       color: 'gray',
-//       width: 1,
-//     }),
-//     fill: new Fill({
-//       color: 'black',
-//     }),
-//   }),
-// });
-
-// this.map = new Map({
-//   target: 'map',
-//   layers: [this.vectorLayer],
-//   controls: defaultControls({
-//     attribution: false,
-//     rotate: false,
-//     zoom: false,
-//   }),
-//   view: new View({
-//     center: [0, 0],
-//     zoom: 2,
-//   }),
-// });
-
-// this.hostAircraftLayer = new VectorLayer({
-//   source: new VectorSource()
-// });
-// this.otherAircraftLayer = new VectorLayer({
-//   source: new VectorSource()
-// });
-
-// this.map.addLayer(this.hostAircraftLayer);
-// this.map.addLayer(this.otherAircraftLayer);
-//   }
-
-// private subscribeToAircraftData() {
-//   this.hostSubscription = this.hostAircraftService.getAircraftData().subscribe(data => {
-//     if (data) {
-//       this.updateHostAircraft(data);
-//     }
-//   });
-
-//   this.otherSubscription = this.otherAircraftService.getAircraftData().subscribe(data => {
-//     this.updateOtherAircraft(data);
-//   });
-// }
-
-
-// private updateHostAircraft(data: AircraftData) {
-//   const source = this.hostAircraftLayer.getSource()!;
-//   const newPosition = fromLonLat([data.longitude, data.latitude]);
-
-//   if (!this.hostFeature) {
-//     this.hostFeature = new Feature(new Point(newPosition));
-//     this.hostFeature.setStyle(new Style({
-//       image: new Icon({
-//         src: 'assets/host-aircraft.svg',
-//         scale: 0.5,
-//         rotation: data.heading * Math.PI / 180
-//       })
-//     }));
-//     source.addFeature(this.hostFeature);
-//     this.lastHostPosition = newPosition;
-//     this.lastHostHeading = data.heading;
-//   } else {
-//     const startPosition = this.lastHostPosition!;
-//     const startHeading = this.lastHostHeading!;
-//     const endPosition = newPosition;
-//     const endHeading = data.heading;
-//     const duration = 1000; // Duration of animation in milliseconds
-//     const startTime = performance.now();
-
-//     const animate = (currentTime: number) => {
-//       const elapsed = currentTime - startTime;
-//       const fraction = Math.min(elapsed / duration, 1);
-
-//       // Interpolate position
-//       const lon = startPosition[0] + fraction * (endPosition[0] - startPosition[0]);
-//       const lat = startPosition[1] + fraction * (endPosition[1] - startPosition[1]);
-//       (this.hostFeature!.getGeometry() as Point).setCoordinates([lon, lat]);
-
-//       // Interpolate heading
-//       let headingDiff = endHeading - startHeading;
-//       // Ensure we rotate the shorter way around
-//       if (headingDiff > 180) headingDiff -= 360;
-//       if (headingDiff < -180) headingDiff += 360;
-//       const currentHeading = startHeading + fraction * headingDiff;
-
-//       const style = this.hostFeature!.getStyle() as Style;
-//       (style.getImage() as Icon).setRotation(currentHeading * Math.PI / 180);
-
-//       if (fraction < 1) {
-//         requestAnimationFrame(animate);
-//       } else {
-//         this.lastHostPosition = endPosition;
-//         this.lastHostHeading = endHeading;
-//       }
-//       this.map.render();
-//     };
-
-//     requestAnimationFrame(animate);
-//   }
-
-//   // Center map on host aircraft only for the first update
-//   if (this.firstHostUpdate) {
-//     this.map.getView().setCenter(newPosition);
-//     this.map.getView().setZoom(7);
-//     this.firstHostUpdate = false;
-//   }
-// }
-
-//   private updateOtherAircraft(data: OtherAircraftData[]) {
-//     const source = this.otherAircraftLayer.getSource()!;
-//     data.forEach(aircraft => {
-//       const id = `aircraft-${aircraft.id}`;
-//       let feature = source.getFeatureById(id) as Feature<Point> | null;
-//       if (!feature) {
-//         feature = new Feature(new Point(fromLonLat([aircraft.longitude, aircraft.latitude])));
-//         feature.setId(id);
-//         feature.setStyle(new Style({
-//           image: new Icon({
-//             src: 'assets/other-aircraft.svg',
-//             scale: 0.3,
-//             rotation: aircraft.heading * Math.PI / 180
-//           })
-//         }));
-//         source.addFeature(feature);
-//       } else {
-//         const geometry = feature.getGeometry() as Point;
-//         const start = geometry.getCoordinates();
-//         const end = fromLonLat([aircraft.longitude, aircraft.latitude]);
-//         const duration = 1000; // Duration of animation in milliseconds
-//         const startTime = performance.now();
-
-//         const animate = (currentTime: number) => {
-//           const elapsed = currentTime - startTime;
-//           const fraction = Math.min(elapsed / duration, 1);
-//           const lon = start[0] + fraction * (end[0] - start[0]);
-//           const lat = start[1] + fraction * (end[1] - start[1]);
-//           geometry.setCoordinates([lon, lat]);
-
-//           const style = feature!.getStyle();
-//           if (style instanceof Style) {
-//             const image = style.getImage();
-//             if (image instanceof Icon) {
-//               image.setRotation(aircraft.heading * Math.PI / 180);
-//             }
-//           }
-
-//           if (fraction < 1) {
-//             requestAnimationFrame(animate);
-//           }
-//           this.map.render();
-//         };
-
-//         requestAnimationFrame(animate);
-//       }
-//     });
-//   }
-
-// resetPositions() {
-//   this.hostAircraftService.resetPosition().subscribe(() => {
-//     console.log('Host aircraft reset');
-//   });
-//   this.otherAircraftService.resetPositions().subscribe(() => {
-//     console.log('Other aircraft reset');
-//   });
-// }
-// }
