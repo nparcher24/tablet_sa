@@ -17,23 +17,41 @@ console.log(`Host aircraft service running on ws://${HOST}:${WS_PORT}`);
 // Initial position (50 miles off the coast of Virginia)
 let latitude = 36.8529;
 let longitude = -76.9214;
-const altitude = 20000; // feet
-const speed = 350; // knots
-const heading = 270; // degrees
+const altitude = 25000; // feet
+const speed = 300; // knots
+let heading = 270; // degrees
+let legStartTime = Date.now();
+let isInTurn = false;
 
 function resetPosition() {
   latitude = 36.8529;
   longitude = -76.9214;
+  heading = 270;
+  legStartTime = Date.now();
+  isInTurn = false;
 }
 
 function updatePosition() {
-  // Convert speed from knots to degrees longitude per second
-  // This conversion depends on the latitude, as longitude degrees are not constant
-  const latitudeRadians = (latitude * Math.PI) / 180;
-  const speedDegPerSec = speed / 3600 / (60 * Math.cos(latitudeRadians));
+  const now = Date.now();
+  const elapsedTime = (now - legStartTime) / 1000; // seconds
 
-  // Update position based on heading (270 degrees is westward)
-  longitude -= speedDegPerSec;
+  if (elapsedTime >= 60) {
+    isInTurn = !isInTurn;
+    legStartTime = now;
+  }
+
+  const turnRate = 0.5; // degrees per second for a 180-degree turn in 60 seconds
+  if (isInTurn) {
+    heading = (heading + turnRate) % 360;
+  }
+
+  const speedDegPerSec = speed / 3600 / 60;
+  const headingRad = (heading * Math.PI) / 180;
+
+  latitude += speedDegPerSec * Math.cos(headingRad);
+  longitude +=
+    (speedDegPerSec * Math.sin(headingRad)) /
+    Math.cos((latitude * Math.PI) / 180);
 
   // Ensure longitude wraps around correctly
   longitude = ((longitude + 180) % 360) - 180;

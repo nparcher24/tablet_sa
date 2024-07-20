@@ -1,13 +1,39 @@
 .map {
-  width: 100%;
+  width: 100vw;
   height: 100vh;
   background-color: #000033;
+  position: relative;
+  overflow: hidden;
+}
+
+.centering-button,
+.breadcrumb-button {
+  position: fixed; // Change to fixed positioning
+  bottom: 2vh; // Use viewport height units
+  z-index: 1000;
+  background-color: white;
 }
 
 .centering-button {
-  position: absolute;
-  bottom: 20px;
-  right: 20px;
-  z-index: 1000;
-  background-color: white;
+  right: 2vw; // Use viewport width units
+}
+
+.breadcrumb-button {
+  left: 2vw; // Use viewport width units
+
+  .breadcrumb-badge {
+    position: absolute;
+    top: -8px;
+    right: -8px;
+    background-color: red;
+    color: white;
+    border-radius: 50%;
+    padding: 2px 6px;
+    font-size: 12px;
+    min-width: 18px;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
 }

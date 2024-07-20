@@ -1,4 +1,8 @@
 <div id="map" class="map"></div>
 <button mat-icon-button class="centering-button" (click)="toggleCentering()">
-  <mat-icon>{{centeringIcon}}</mat-icon>
+  <mat-icon>{{ centeringIcon }}</mat-icon>
+</button>
+<button mat-icon-button class="breadcrumb-button" (click)="toggleBreadcrumbs()">
+  <mat-icon>more_horiz</mat-icon>
+  <span class="breadcrumb-badge">{{ breadcrumbCount }}</span>
 </button>

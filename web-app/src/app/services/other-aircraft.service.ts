@@ -8,6 +8,7 @@ export interface OtherAircraftData {
   longitude: number;
   heading: number;
   speed: number;
+  breadcrumbs: [number, number][];
 }
 
 @Injectable({
@@ -29,15 +30,35 @@ export class OtherAircraftService {
     };
   }
 
+  private breadcrumbCount = 0;
+
   private updateAircraftData(data: any[]) {
-    const updatedAircraft = data.map(aircraft => ({
-      id: aircraft.id,
-      latitude: aircraft.latitude,
-      longitude: aircraft.longitude,
-      heading: (aircraft.heading + 270) % 360, // Adjust heading by 270 degrees
-      speed: aircraft.speed
-    }));
+    const updatedAircraft: OtherAircraftData[] = data.map(aircraft => {
+      const newPosition: [number, number] = [aircraft.longitude, aircraft.latitude];
+      const existingAircraft = this.aircraftSubject.getValue().find(a => a.id === aircraft.id);
+      let breadcrumbs: [number, number][] = [newPosition];
+
+      if (existingAircraft && existingAircraft.breadcrumbs) {
+        breadcrumbs = [newPosition, ...existingAircraft.breadcrumbs.slice(0, this.breadcrumbCount - 1)];
+      }
+
+      // console.log(`Aircraft ${aircraft.id}: Breadcrumbs count = ${breadcrumbs.length}, Breadcrumb limit = ${this.breadcrumbCount}`);
+
+      return {
+        id: aircraft.id,
+        latitude: aircraft.latitude,
+        longitude: aircraft.longitude,
+        heading: (aircraft.heading + 270) % 360,
+        speed: aircraft.speed,
+        breadcrumbs
+      };
+    });
+
     this.aircraftSubject.next(updatedAircraft);
+  }
+
+  setBreadcrumbCount(count: number) {
+    this.breadcrumbCount = count;
   }
 
   getAircraftData(): Observable<OtherAircraftData[]> {

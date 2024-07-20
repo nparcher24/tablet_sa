@@ -36,55 +36,65 @@ enum CenteringMode {
 export class MapComponent implements OnInit, OnDestroy {
   private map!: OLMap;
   private vectorLayer!: VectorLayer<Feature<Geometry>>;
-  private hostAircraftLayer!: VectorLayer<Feature<Geometry>>;
+  // private hostAircraftLayer!: VectorLayer<Feature<Geometry>>;
+  private hostAircraftLayer!: WebGLPointsLayer<VectorSource<FeatureLike>>;
   private otherAircraftLayer!: WebGLPointsLayer<VectorSource<FeatureLike>>;
   private hostSubscription!: Subscription;
   private otherSubscription!: Subscription;
   private firstHostUpdate = true;
   private lastHostPosition: Coordinate | null = null;
   private lastHostHeading: number | null = null;
-  private hostFeature: Feature<Point> | null = null;
+  // private hostFeature: Feature<Point> | null = null;
   public isCentered: boolean = true;
   private centeringMode: CenteringMode = CenteringMode.CenterWithHeading;
   public centeringIcon: string = 'navigation';
+  private breadcrumbLayer!: WebGLPointsLayer<VectorSource<FeatureLike>>;
+  public breadcrumbCount = 0;
+  private vectorSource110m = new VectorSource({
+    url: 'assets/maps/ne_110m_admin_0_countries.json',
+    format: new GeoJSON(),
+  });
+
+  private vectorSource50m = new VectorSource({
+    url: 'assets/maps/ne_50m_admin_0_countries.json',
+    format: new GeoJSON(),
+  });
+
+  private vectorSource10m = new VectorSource({
+    url: 'assets/maps/ne_10m_admin_0_countries.json',
+    format: new GeoJSON(),
+  });
+
+  private mapMoveEndListener: any;
+  private mapPostRenderListener: any;
+
 
   constructor(
     private hostAircraftService: HostAircraftService,
     private otherAircraftService: OtherAircraftService
-  ) { }
+  ) {
+  }
 
   ngOnInit() {
     this.resetPositions();
     this.initMap();
     this.subscribeToAircraftData();
+    this.toggleBreadcrumbs();
   }
 
   ngOnDestroy() {
     this.hostSubscription.unsubscribe();
     this.otherSubscription.unsubscribe();
+    this.map.un('moveend', this.mapMoveEndListener);
   }
 
   private initMap() {
 
     let previousZoom = -1; // Holds the previous zoom level
 
-    const vectorSource110m = new VectorSource({
-      url: 'assets/maps/ne_110m_admin_0_countries.json',
-      format: new GeoJSON(),
-    });
-
-    const vectorSource50m = new VectorSource({
-      url: 'assets/maps/ne_50m_admin_0_countries.json',
-      format: new GeoJSON(),
-    });
-
-    const vectorSource10m = new VectorSource({
-      url: 'assets/maps/ne_10m_admin_0_countries.json',
-      format: new GeoJSON(),
-    });
 
     this.vectorLayer = new VectorLayer({
-      source: vectorSource110m,
+      source: this.vectorSource110m,
       renderBuffer: 10000,
       style: new Style({
         stroke: new Stroke({
@@ -111,17 +121,19 @@ export class MapComponent implements OnInit, OnDestroy {
       }),
     });
 
-    this.map.on('postrender', () => {
-      if (this.hostFeature) {
-        const mapRotation = this.map.getView().getRotation();
-        const style = this.hostFeature.getStyle() as Style;
-        (style.getImage() as Icon).setRotation(this.lastHostHeading! * Math.PI / 180 + mapRotation);
-        this.map.render();
-      }
-    });
+    // this.mapPostRenderListener = this.map.on('postrender', () => {
+    //   const source = this.hostAircraftLayer.getSource() as VectorSource;
+    //   const hostFeature = source.getFeatureById('host-aircraft');
+    //   if (hostFeature && this.lastHostHeading !== null) {
+    //     const mapRotation = this.map.getView().getRotation();
+    //     hostFeature.set('heading', this.lastHostHeading * Math.PI / 180 + mapRotation, true);
+    //     this.hostAircraftLayer.changed();
+    //     this.map.render();
+    //   }
+    // });
 
     // Add event listener for when the map stops moving
-    this.map.on('moveend', () => {
+    this.mapMoveEndListener = this.map.on('moveend', () => {
 
       const currentZoom = this.map.getView().getZoom();
 
@@ -130,17 +142,33 @@ export class MapComponent implements OnInit, OnDestroy {
 
         // Determine which resolution to show based on the zoom level
         if (currentZoom! <= 6) {
-          this.vectorLayer.setSource(vectorSource110m);
+          this.vectorLayer.setSource(this.vectorSource110m);
         } else if (currentZoom! > 6 && currentZoom! <= 10) {
-          this.vectorLayer.setSource(vectorSource50m);
+          this.vectorLayer.setSource(this.vectorSource50m);
         } else if (currentZoom! > 10) {
-          this.vectorLayer.setSource(vectorSource10m);
+          this.vectorLayer.setSource(this.vectorSource10m);
         }
       }
     });
 
-    this.hostAircraftLayer = new VectorLayer({
+    // this.hostAircraftLayer = new VectorLayer({
+    //   source: new VectorSource(),
+    // });
+
+    // this.map.addLayer(this.hostAircraftLayer);
+
+    this.hostAircraftLayer = new WebGLPointsLayer({
       source: new VectorSource(),
+      style: {
+        'icon-src': 'assets/host-aircraft.svg',
+        'icon-width': 50,
+        'icon-height': 50,
+        'icon-size': 0.5,
+        'icon-rotate-with-view': true,
+        'icon-rotation': ['get', 'heading'],
+        'icon-displacement': [0, 9],
+      },
+      disableHitDetection: true,
     });
 
     this.map.addLayer(this.hostAircraftLayer);
@@ -167,6 +195,17 @@ export class MapComponent implements OnInit, OnDestroy {
     this.map.once('postrender', () => {
       this.map.renderSync();
     });
+
+    // Add event listeners for user interactions
+    this.map.on('pointerdrag', () => {
+      this.disableAutoCentering();
+    });
+
+    this.map.getView().on('change:rotation', () => {
+      if (this.centeringMode === CenteringMode.CenterWithHeading) {
+        this.disableAutoCentering();
+      }
+    });
   }
 
   private subscribeToAircraftData() {
@@ -181,87 +220,56 @@ export class MapComponent implements OnInit, OnDestroy {
     });
   }
 
+
+  private smoothFactor = 1; // Adjust this value to change smoothing (0-1)
+  private currentPosition: Coordinate | null = null;
+
   private updateHostAircraft(data: AircraftData) {
-    const source = this.hostAircraftLayer.getSource()!;
+    const source = this.hostAircraftLayer.getSource() as VectorSource;
     const newPosition = fromLonLat([data.longitude, data.latitude]);
 
-    if (!this.hostFeature) {
-      this.hostFeature = new Feature(new Point(newPosition));
-      this.hostFeature.setStyle(new Style({
-        image: new Icon({
-          src: 'assets/host-aircraft.svg',
-          scale: 0.5,
-          rotation: 0  // We'll update this in the animation
-        })
-      }));
-      source.addFeature(this.hostFeature);
-      this.lastHostPosition = newPosition;
-      this.lastHostHeading = data.heading;
+    if (!this.currentPosition) {
+      this.currentPosition = newPosition;
     } else {
-      const startPosition = this.lastHostPosition!;
-      const startHeading = this.lastHostHeading!;
-      const endPosition = newPosition;
-      const endHeading = data.heading;
-      const duration = 100;
-      const startTime = performance.now();
-
-      const animate = (currentTime: number) => {
-        const elapsed = currentTime - startTime;
-        const fraction = Math.min(elapsed / duration, 1);
-
-        // Interpolate position
-        const lon = startPosition[0] + fraction * (endPosition[0] - startPosition[0]);
-        const lat = startPosition[1] + fraction * (endPosition[1] - startPosition[1]);
-        (this.hostFeature!.getGeometry() as Point).setCoordinates([lon, lat]);
-
-        // Interpolate heading
-        let headingDiff = endHeading - startHeading;
-        if (headingDiff > 180) headingDiff -= 360;
-        if (headingDiff < -180) headingDiff += 360;
-        const currentHeading = startHeading + fraction * headingDiff;
-
-        // Update icon rotation based on current heading and map rotation
-        const mapRotation = this.map.getView().getRotation();
-        const style = this.hostFeature!.getStyle() as Style;
-        (style.getImage() as Icon).setRotation(currentHeading * Math.PI / 180 + mapRotation);
-
-        if (fraction < 1) {
-          requestAnimationFrame(animate);
-        } else {
-          this.lastHostPosition = endPosition;
-          this.lastHostHeading = endHeading;
-
-          // Only update map center after animation completes
-          if (this.centeringMode !== CenteringMode.None) {
-            this.smoothCenter(endPosition);
-            if (this.centeringMode === CenteringMode.CenterWithHeading) {
-              this.map.getView().setRotation(-endHeading * Math.PI / 180);
-            }
-          }
-        }
-        this.map.render();
-      };
-
-      requestAnimationFrame(animate);
+      // Interpolate between current and new position
+      this.currentPosition = [
+        this.currentPosition[0] + (newPosition[0] - this.currentPosition[0]) * this.smoothFactor,
+        this.currentPosition[1] + (newPosition[1] - this.currentPosition[1]) * this.smoothFactor
+      ];
     }
 
+    let feature = source.getFeatureById('host-aircraft') as Feature<Point> | null;
+    if (!feature) {
+      feature = new Feature({
+        geometry: new Point(this.currentPosition),
+        heading: data.heading * Math.PI / 180,
+      });
+      feature.setId('host-aircraft');
+      source.addFeature(feature);
+    } else {
+      const geometry = feature.getGeometry() as Point;
+      geometry.setCoordinates(this.currentPosition);
+      feature.set('heading', data.heading * Math.PI / 180, true);
+    }
+
+    // Use smoothed position for map centering only if auto-centering is enabled
     if (this.centeringMode !== CenteringMode.None) {
-      this.map.getView().setCenter(newPosition);
+      this.map.getView().setCenter(this.currentPosition);
       if (this.centeringMode === CenteringMode.CenterWithHeading) {
         this.map.getView().setRotation(-data.heading * Math.PI / 180);
       }
     }
 
-    // Update the host aircraft icon rotation even when not animating
-    const mapRotation = this.map.getView().getRotation();
-    const style = this.hostFeature!.getStyle() as Style;
-    (style.getImage() as Icon).setRotation(data.heading * Math.PI / 180 + mapRotation);
-
+    this.lastHostPosition = newPosition;
+    this.lastHostHeading = data.heading;
 
     if (this.firstHostUpdate) {
       this.map.getView().setZoom(7);
       this.firstHostUpdate = false;
     }
+
+    this.hostAircraftLayer.changed();
+    this.map.render();
   }
 
   private updateOtherAircraft(data: OtherAircraftData[]) {
@@ -276,6 +284,7 @@ export class MapComponent implements OnInit, OnDestroy {
         feature = new Feature({
           geometry: new Point(fromLonLat([aircraft.longitude, aircraft.latitude])),
           heading: (aircraft.heading) * Math.PI / 180,
+          breadcrumbs: aircraft.breadcrumbs
         });
         feature.setId(id);
         source.addFeature(feature);
@@ -283,6 +292,7 @@ export class MapComponent implements OnInit, OnDestroy {
         const geometry = feature.getGeometry() as Point;
         geometry.setCoordinates(fromLonLat([aircraft.longitude, aircraft.latitude]));
         feature.set('heading', (aircraft.heading) * Math.PI / 180, true);
+        feature.set('breadcrumbs', aircraft.breadcrumbs, true);
       }
 
       existingIds.delete(id);
@@ -295,6 +305,7 @@ export class MapComponent implements OnInit, OnDestroy {
     });
 
     // Force re-render of the layer
+    this.updateBreadcrumbs();
     this.otherAircraftLayer.changed();
     this.map.render();
   }
@@ -330,29 +341,106 @@ export class MapComponent implements OnInit, OnDestroy {
         this.centeringIcon = 'navigation';
         break;
       case CenteringMode.CenterWithHeading:
-        this.centeringMode = CenteringMode.None;
-        this.centeringIcon = 'gps_off';
-        this.map.getView().setRotation(0);
-        break;
+        this.disableAutoCentering();
+        return; // Exit the method early as centering is now disabled
     }
 
-    if (this.centeringMode !== CenteringMode.None && this.hostFeature) {
-      const geometry = this.hostFeature.getGeometry() as Point;
-      this.smoothCenter(geometry.getCoordinates());
+    // This block will only execute if centering mode was changed to a non-None value
+    if (this.lastHostPosition) {
+      this.map.getView().setCenter(this.lastHostPosition);
       if (this.centeringMode === CenteringMode.CenterWithHeading) {
-        const newRotation = -this.lastHostHeading! * Math.PI / 180;
-        this.map.getView().setRotation(newRotation);
-
-        // Update host aircraft icon rotation
-        const style = this.hostFeature.getStyle() as Style;
-        (style.getImage() as Icon).setRotation(this.lastHostHeading! * Math.PI / 180 + newRotation);
-      } else {
-        // Reset host aircraft icon rotation when not in CenterWithHeading mode
-        const style = this.hostFeature.getStyle() as Style;
-        (style.getImage() as Icon).setRotation(this.lastHostHeading! * Math.PI / 180);
+        this.map.getView().setRotation(-this.lastHostHeading! * Math.PI / 180);
       }
     }
   }
 
+  toggleBreadcrumbs() {
+    const counts = [0, 5, 10, 20];
+    this.breadcrumbCount = counts[(counts.indexOf(this.breadcrumbCount) + 1) % counts.length];
+    this.otherAircraftService.setBreadcrumbCount(this.breadcrumbCount);
 
+    console.log(`Breadcrumb count set to: ${this.breadcrumbCount}`);
+
+    if (!this.map) {
+      console.warn('Map not initialized yet');
+      return;
+    }
+
+    if (this.breadcrumbCount > 0) {
+      if (!this.breadcrumbLayer) {
+        this.initBreadcrumbLayer();
+      }
+      this.updateBreadcrumbs();
+    } else {
+      this.removeBreadcrumbLayer();
+    }
+  }
+
+  private removeBreadcrumbLayer() {
+    if (this.map && this.breadcrumbLayer) {
+      this.map.removeLayer(this.breadcrumbLayer);
+      this.breadcrumbLayer = undefined!;
+    }
+  }
+
+  private initBreadcrumbLayer() {
+    this.breadcrumbLayer = new WebGLPointsLayer({
+      source: new VectorSource(),
+      style: {
+        'circle-radius': 3,
+        'circle-fill-color': 'rgba(255, 255, 255, 0.7)',
+      },
+      disableHitDetection: true,
+    });
+    this.map.addLayer(this.breadcrumbLayer);
+    console.log('Breadcrumb layer initialized');
+  }
+
+  private updateBreadcrumbs() {
+    if (this.breadcrumbCount === 0 || !this.breadcrumbLayer) {
+      this.removeBreadcrumbLayer();
+      return;
+    }
+
+    if (!this.otherAircraftLayer) {
+      console.warn('Other aircraft layer not initialized yet');
+      return;
+    }
+
+    const source = this.otherAircraftLayer.getSource() as VectorSource<Feature<Geometry>>;
+    const breadcrumbSource = this.breadcrumbLayer.getSource() as VectorSource<Feature<Geometry>>;
+    const existingFeatures = new Map(breadcrumbSource.getFeatures().map(f => [f.getId(), f]));
+
+    source.getFeatures().forEach(aircraft => {
+      const properties = aircraft.getProperties() as OtherAircraftData;
+      if (properties.breadcrumbs && properties.breadcrumbs.length > 0) {
+        properties.breadcrumbs.forEach((coords: [number, number], index: number) => {
+          const id = `${aircraft.getId()}-${index}`;
+          let feature = existingFeatures.get(id) as Feature<Point> | undefined;
+          if (!feature) {
+            feature = new Feature({
+              geometry: new Point(fromLonLat(coords)),
+              properties: { opacity: 1 - index / this.breadcrumbCount }
+            });
+            feature.setId(id);
+            breadcrumbSource.addFeature(feature);
+          } else {
+            (feature.getGeometry() as Point).setCoordinates(fromLonLat(coords));
+            feature.set('properties', { opacity: 1 - index / this.breadcrumbCount });
+            existingFeatures.delete(id);
+          }
+        });
+      }
+    });
+
+    // Remove outdated features
+    existingFeatures.forEach(feature => breadcrumbSource.removeFeature(feature));
+
+    this.breadcrumbLayer.changed();
+  }
+
+  private disableAutoCentering() {
+    this.centeringMode = CenteringMode.None;
+    this.centeringIcon = 'gps_off';
+  }
 }
