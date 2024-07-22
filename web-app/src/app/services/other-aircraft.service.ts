@@ -1,7 +1,8 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { BehaviorSubject, Observable } from 'rxjs';
-
+import { BehaviorSubject, Observable, timer } from 'rxjs';
+import { AircraftGenerator, AircraftData } from './aircraft-generator';
+import { environment } from '../../environments/environment';
 export interface OtherAircraftData {
   id: string;
   latitude: number;
@@ -15,40 +16,54 @@ export interface OtherAircraftData {
   providedIn: 'root'
 })
 export class OtherAircraftService {
-  private webSocket!: WebSocket;
+  private webSocket: WebSocket | null = null;
   private aircraftSubject = new BehaviorSubject<OtherAircraftData[]>([]);
+  private breadcrumbCount = 0;
+  private breadcrumbMap = new Map<string, [number, number][]>();
+  private lastUpdateTime = 0;
 
-  constructor(private http: HttpClient) {
-    this.initWebSocket();
+  constructor(
+    private http: HttpClient,
+    private aircraftGenerator: AircraftGenerator
+  ) {
+    if (environment.useLocalGenerator) {
+      timer(0, 1000).subscribe(() => this.updateLocalAircraftData());
+    } else {
+      this.initWebSocket();
+    }
   }
 
   private initWebSocket() {
-    this.webSocket = new WebSocket('ws://localhost:8081');
+    this.webSocket = new WebSocket(environment.otherAircraftWsUrl);
     this.webSocket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      this.updateAircraftData(data);
+      const currentTime = Date.now();
+      if (currentTime - this.lastUpdateTime >= 1000) {
+        const data = JSON.parse(event.data);
+        this.updateAircraftData(data);
+        this.lastUpdateTime = currentTime;
+      }
     };
   }
 
-  private breadcrumbCount = 0;
+  private updateLocalAircraftData() {
+    const allAircraft = this.aircraftGenerator.getData();
+    const otherAircraft = allAircraft.filter(a => a.id !== 'host');
+    this.updateAircraftData(otherAircraft);
+  }
+
 
   private updateAircraftData(data: any[]) {
     const updatedAircraft: OtherAircraftData[] = data.map(aircraft => {
-      const newPosition: [number, number] = [aircraft.longitude, aircraft.latitude];
-      const existingAircraft = this.aircraftSubject.getValue().find(a => a.id === aircraft.id);
-      let breadcrumbs: [number, number][] = [newPosition];
-
-      if (existingAircraft && existingAircraft.breadcrumbs) {
-        breadcrumbs = [newPosition, ...existingAircraft.breadcrumbs.slice(0, this.breadcrumbCount - 1)];
-      }
-
-      // console.log(`Aircraft ${aircraft.id}: Breadcrumbs count = ${breadcrumbs.length}, Breadcrumb limit = ${this.breadcrumbCount}`);
+      const newPosition: [number, number] = [aircraft.longitude || aircraft.lon, aircraft.latitude || aircraft.lat];
+      let breadcrumbs = this.breadcrumbMap.get(aircraft.id) || [];
+      breadcrumbs = [newPosition, ...breadcrumbs.slice(0, this.breadcrumbCount - 1)];
+      this.breadcrumbMap.set(aircraft.id, breadcrumbs);
 
       return {
         id: aircraft.id,
-        latitude: aircraft.latitude,
-        longitude: aircraft.longitude,
-        heading: (aircraft.heading + 270) % 360,
+        latitude: aircraft.latitude || aircraft.lat,
+        longitude: aircraft.longitude || aircraft.lon,
+        heading: aircraft.heading,
         speed: aircraft.speed,
         breadcrumbs
       };
@@ -59,6 +74,13 @@ export class OtherAircraftService {
 
   setBreadcrumbCount(count: number) {
     this.breadcrumbCount = count;
+    if (count === 0) {
+      this.breadcrumbMap.clear();
+    } else {
+      this.breadcrumbMap.forEach((breadcrumbs, id) => {
+        this.breadcrumbMap.set(id, breadcrumbs.slice(0, count));
+      });
+    }
   }
 
   getAircraftData(): Observable<OtherAircraftData[]> {
@@ -66,6 +88,15 @@ export class OtherAircraftService {
   }
 
   resetPositions() {
-    return this.http.post('http://localhost:8091/reset', {}, { responseType: 'json' });
+    if (environment.useLocalGenerator) {
+      this.aircraftGenerator.reset();
+      this.breadcrumbMap.clear();
+      return new Observable(observer => {
+        observer.next({ message: "Other aircraft positions reset" });
+        observer.complete();
+      });
+    } else {
+      return this.http.post(environment.otherAircraftResetUrl, {}, { responseType: 'json' });
+    }
   }
 }

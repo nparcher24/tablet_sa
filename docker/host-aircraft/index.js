@@ -8,7 +8,7 @@ const WS_PORT = 8080;
 const HTTP_PORT = 8090;
 
 const app = express();
-app.use(cors()); // Add this line
+app.use(cors());
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
@@ -20,30 +20,19 @@ let longitude = -76.9214;
 const altitude = 25000; // feet
 const speed = 300; // knots
 let heading = 270; // degrees
-let legStartTime = Date.now();
-let isInTurn = false;
+
+// Turn rate: 180 degrees per minute = 3 degrees per second
+const turnRate = 3;
 
 function resetPosition() {
   latitude = 36.8529;
   longitude = -76.9214;
   heading = 270;
-  legStartTime = Date.now();
-  isInTurn = false;
 }
 
 function updatePosition() {
-  const now = Date.now();
-  const elapsedTime = (now - legStartTime) / 1000; // seconds
-
-  if (elapsedTime >= 60) {
-    isInTurn = !isInTurn;
-    legStartTime = now;
-  }
-
-  const turnRate = 0.5; // degrees per second for a 180-degree turn in 60 seconds
-  if (isInTurn) {
-    heading = (heading + turnRate) % 360;
-  }
+  // Update heading (constant left turn)
+  heading = (heading - turnRate / 10 + 360) % 360; // Divide by 10 because we update 10 times per second
 
   const speedDegPerSec = speed / 3600 / 60;
   const headingRad = (heading * Math.PI) / 180;
@@ -81,7 +70,7 @@ wss.on("connection", (ws) => {
 });
 
 // Reset endpoint
-app.options("/reset", cors()); // Enable pre-flight request for POST request
+app.options("/reset", cors());
 app.post("/reset", (req, res) => {
   resetPosition();
   res.json({ message: "Host aircraft position reset" });

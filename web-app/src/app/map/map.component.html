@@ -1,8 +1,42 @@
 <div id="map" class="map"></div>
-<button mat-icon-button class="centering-button" (click)="toggleCentering()">
-  <mat-icon>{{ centeringIcon }}</mat-icon>
-</button>
-<button mat-icon-button class="breadcrumb-button" (click)="toggleBreadcrumbs()">
-  <mat-icon>more_horiz</mat-icon>
-  <span class="breadcrumb-badge">{{ breadcrumbCount }}</span>
-</button>
+<div id="compass-rose" class="compass-rose"></div>
+<div class="button-container">
+  <div class="left-buttons">
+    <button
+      mat-mini-fab
+      color="primary"
+      class="centering-button"
+      (click)="toggleCentering()"
+    >
+      <mat-icon>{{ centeringIcon }}</mat-icon>
+    </button>
+    <button
+      mat-mini-fab
+      color="primary"
+      class="center-position-button"
+      (click)="toggleCenterPosition()"
+      *ngIf="
+        centeringMode === CenteringMode.CenterWithHeading ||
+        centeringMode === CenteringMode.CenterWithHeadingOffset
+      "
+    >
+      <mat-icon>{{
+        centerPosition === "middle"
+          ? "vertical_align_center"
+          : "vertical_align_bottom"
+      }}</mat-icon>
+    </button>
+  </div>
+  
+  <div class="spacer"></div>
+
+  <button
+    mat-mini-fab
+    color="primary"
+    class="breadcrumb-button"
+    (click)="toggleBreadcrumbs()"
+  >
+    <mat-icon>more_horiz</mat-icon>
+    <span class="breadcrumb-badge">{{ breadcrumbCount }}</span>
+  </button>
+</div>

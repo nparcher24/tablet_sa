@@ -1,5 +1,5 @@
 
-import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Component, OnInit, OnDestroy, ElementRef, Renderer2 } from '@angular/core';
 import { Map as OLMap, View } from 'ol';
 import { fromLonLat } from 'ol/proj';
 import Feature, { FeatureLike } from 'ol/Feature';
@@ -9,22 +9,28 @@ import { Style, Icon, Stroke, Fill } from 'ol/style';
 import { CommonModule } from '@angular/common';
 import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
-import { Geometry } from 'ol/geom';
+import { Geometry, LineString } from 'ol/geom';
 import GeoJSON from 'ol/format/GeoJSON';
 import WebGLPointsLayer from 'ol/layer/WebGLPoints';
 import { Subscription } from 'rxjs';
-import { AircraftData, HostAircraftService } from '../services/host-aircraft.service';
+import { HostAircraftData, HostAircraftService } from '../services/host-aircraft.service';
 import { OtherAircraftData, OtherAircraftService } from '../services/other-aircraft.service';
 import { Coordinate } from 'ol/coordinate';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
+import { toLonLat } from 'ol/proj';
+import { Circle } from 'ol/geom';
+import { Text } from 'ol/style';
+import { getDistance } from 'ol/sphere';
 
 
 enum CenteringMode {
   None,
   Center,
-  CenterWithHeading
+  CenterWithHeading,
+  CenterWithHeadingOffset
 }
+
 
 @Component({
   selector: 'app-map',
@@ -34,8 +40,11 @@ enum CenteringMode {
   styleUrl: './map.component.scss'
 })
 export class MapComponent implements OnInit, OnDestroy {
+
   private map!: OLMap;
   private vectorLayer!: VectorLayer<Feature<Geometry>>;
+  public CenteringMode = CenteringMode;
+
   // private hostAircraftLayer!: VectorLayer<Feature<Geometry>>;
   private hostAircraftLayer!: WebGLPointsLayer<VectorSource<FeatureLike>>;
   private otherAircraftLayer!: WebGLPointsLayer<VectorSource<FeatureLike>>;
@@ -46,10 +55,20 @@ export class MapComponent implements OnInit, OnDestroy {
   private lastHostHeading: number | null = null;
   // private hostFeature: Feature<Point> | null = null;
   public isCentered: boolean = true;
-  private centeringMode: CenteringMode = CenteringMode.CenterWithHeading;
+  public centeringMode: CenteringMode = CenteringMode.CenterWithHeadingOffset;
   public centeringIcon: string = 'navigation';
+  public centerPosition: 'middle' | 'third' = 'third';
   private breadcrumbLayer!: WebGLPointsLayer<VectorSource<FeatureLike>>;
-  public breadcrumbCount = 0;
+  public breadcrumbCount = 0; // Default to off
+  private smoothFactor = 1; // Adjust this value to change smoothing (0-1)
+  private currentPosition: Coordinate | null = null;
+  private isIntentionalUpdate: boolean = false;
+  private compassRose: HTMLElement | null = null;
+  private rangeRingsLayer!: VectorLayer<FeatureLike>;
+  private rangeRings: number[] = [2, 5, 10, 20, 50, 100, 200, 500, 1000];
+
+
+
   private vectorSource110m = new VectorSource({
     url: 'assets/maps/ne_110m_admin_0_countries.json',
     format: new GeoJSON(),
@@ -71,7 +90,9 @@ export class MapComponent implements OnInit, OnDestroy {
 
   constructor(
     private hostAircraftService: HostAircraftService,
-    private otherAircraftService: OtherAircraftService
+    private otherAircraftService: OtherAircraftService,
+    private elementRef: ElementRef,
+    private renderer: Renderer2
   ) {
   }
 
@@ -80,6 +101,8 @@ export class MapComponent implements OnInit, OnDestroy {
     this.initMap();
     this.subscribeToAircraftData();
     this.toggleBreadcrumbs();
+    this.initCompassRose();
+
   }
 
   ngOnDestroy() {
@@ -121,17 +144,6 @@ export class MapComponent implements OnInit, OnDestroy {
       }),
     });
 
-    // this.mapPostRenderListener = this.map.on('postrender', () => {
-    //   const source = this.hostAircraftLayer.getSource() as VectorSource;
-    //   const hostFeature = source.getFeatureById('host-aircraft');
-    //   if (hostFeature && this.lastHostHeading !== null) {
-    //     const mapRotation = this.map.getView().getRotation();
-    //     hostFeature.set('heading', this.lastHostHeading * Math.PI / 180 + mapRotation, true);
-    //     this.hostAircraftLayer.changed();
-    //     this.map.render();
-    //   }
-    // });
-
     // Add event listener for when the map stops moving
     this.mapMoveEndListener = this.map.on('moveend', () => {
 
@@ -151,11 +163,6 @@ export class MapComponent implements OnInit, OnDestroy {
       }
     });
 
-    // this.hostAircraftLayer = new VectorLayer({
-    //   source: new VectorSource(),
-    // });
-
-    // this.map.addLayer(this.hostAircraftLayer);
 
     this.hostAircraftLayer = new WebGLPointsLayer({
       source: new VectorSource(),
@@ -190,22 +197,44 @@ export class MapComponent implements OnInit, OnDestroy {
 
     this.map.addLayer(this.otherAircraftLayer);
 
+    this.rangeRingsLayer = new VectorLayer({
+      source: new VectorSource(),
+      style: (feature) => this.rangeRingStyle(feature),
+      updateWhileAnimating: true,
+      updateWhileInteracting: true,
+    });
+    this.map.addLayer(this.rangeRingsLayer);
+
 
     // Ensure WebGL is initialized
     this.map.once('postrender', () => {
       this.map.renderSync();
     });
 
-    // Add event listeners for user interactions
-    this.map.on('pointerdrag', () => {
-      this.disableAutoCentering();
-    });
 
-    this.map.getView().on('change:rotation', () => {
-      if (this.centeringMode === CenteringMode.CenterWithHeading) {
+    this.map.getView().on('change:rotation', (event) => {
+      if (!this.isIntentionalUpdate && this.centeringMode !== CenteringMode.None && event.oldValue !== undefined) {
         this.disableAutoCentering();
       }
     });
+
+    this.map.on('pointerdrag', () => {
+      if (!this.isIntentionalUpdate && this.centeringMode !== CenteringMode.None) {
+        this.disableAutoCentering();
+      }
+    });
+
+    this.map.getView().on('change:resolution', () => this.updateRangeRings());
+
+    this.map.getView().on(['change:center', 'change:resolution', 'change:rotation'], () => {
+      this.updateRangeRings();
+    });
+
+
+  }
+
+  private initCompassRose() {
+    this.compassRose = this.elementRef.nativeElement.querySelector('#compass-rose');
   }
 
   private subscribeToAircraftData() {
@@ -221,10 +250,8 @@ export class MapComponent implements OnInit, OnDestroy {
   }
 
 
-  private smoothFactor = 1; // Adjust this value to change smoothing (0-1)
-  private currentPosition: Coordinate | null = null;
 
-  private updateHostAircraft(data: AircraftData) {
+  private updateHostAircraft(data: HostAircraftData) {
     const source = this.hostAircraftLayer.getSource() as VectorSource;
     const newPosition = fromLonLat([data.longitude, data.latitude]);
 
@@ -252,16 +279,14 @@ export class MapComponent implements OnInit, OnDestroy {
       feature.set('heading', data.heading * Math.PI / 180, true);
     }
 
-    // Use smoothed position for map centering only if auto-centering is enabled
-    if (this.centeringMode !== CenteringMode.None) {
-      this.map.getView().setCenter(this.currentPosition);
-      if (this.centeringMode === CenteringMode.CenterWithHeading) {
-        this.map.getView().setRotation(-data.heading * Math.PI / 180);
-      }
-    }
 
     this.lastHostPosition = newPosition;
     this.lastHostHeading = data.heading;
+
+
+    this.updateMapView();
+    this.updateRangeRings();
+
 
     if (this.firstHostUpdate) {
       this.map.getView().setZoom(7);
@@ -334,28 +359,24 @@ export class MapComponent implements OnInit, OnDestroy {
     switch (this.centeringMode) {
       case CenteringMode.None:
         this.centeringMode = CenteringMode.Center;
-        this.centeringIcon = 'gps_fixed';
+        this.centeringIcon = 'north';
         break;
       case CenteringMode.Center:
         this.centeringMode = CenteringMode.CenterWithHeading;
+        this.centerPosition = 'middle';
         this.centeringIcon = 'navigation';
         break;
       case CenteringMode.CenterWithHeading:
-        this.disableAutoCentering();
-        return; // Exit the method early as centering is now disabled
+      case CenteringMode.CenterWithHeadingOffset:
+        this.centeringMode = CenteringMode.None;
+        this.centeringIcon = 'gps_off';
+        break;
     }
-
-    // This block will only execute if centering mode was changed to a non-None value
-    if (this.lastHostPosition) {
-      this.map.getView().setCenter(this.lastHostPosition);
-      if (this.centeringMode === CenteringMode.CenterWithHeading) {
-        this.map.getView().setRotation(-this.lastHostHeading! * Math.PI / 180);
-      }
-    }
+    this.updateMapView();
   }
 
   toggleBreadcrumbs() {
-    const counts = [0, 5, 10, 20];
+    const counts = [0, 5, 10, 20, 50];
     this.breadcrumbCount = counts[(counts.indexOf(this.breadcrumbCount) + 1) % counts.length];
     this.otherAircraftService.setBreadcrumbCount(this.breadcrumbCount);
 
@@ -440,7 +461,167 @@ export class MapComponent implements OnInit, OnDestroy {
   }
 
   private disableAutoCentering() {
-    this.centeringMode = CenteringMode.None;
-    this.centeringIcon = 'gps_off';
+    if (this.centeringMode !== CenteringMode.None) {
+      this.centeringMode = CenteringMode.None;
+      this.centeringIcon = 'gps_off';
+      console.log('Auto-centering disabled');
+    }
+  }
+
+  toggleCenterPosition() {
+    if (this.centeringMode === CenteringMode.CenterWithHeading) {
+      this.centeringMode = CenteringMode.CenterWithHeadingOffset;
+      this.centerPosition = 'third';
+    } else if (this.centeringMode === CenteringMode.CenterWithHeadingOffset) {
+      this.centeringMode = CenteringMode.CenterWithHeading;
+      this.centerPosition = 'middle';
+    }
+    this.updateMapView();
+  }
+
+  private updateMapView() {
+    if (this.lastHostPosition && this.lastHostHeading !== null) {
+      const view = this.map.getView();
+      const mapSize = this.map.getSize();
+
+      if (this.centeringMode !== CenteringMode.None) {
+        this.isIntentionalUpdate = true;
+
+        if (this.centeringMode === CenteringMode.Center) {
+          view.setRotation(0); // Keep the map oriented north
+          view.setCenter(this.lastHostPosition);
+          this.updateCompassRose(0); // Update compass rose for north-up
+        } else {
+          const rotation = -this.lastHostHeading * Math.PI / 180;
+          view.setRotation(rotation);
+          this.updateCompassRose(rotation);
+
+          if (this.centeringMode === CenteringMode.CenterWithHeadingOffset && mapSize) {
+            const offsetDistance = mapSize[1] / 3; // 1/3 of the map height
+            const resolution = view.getResolution();
+            if (resolution) {
+              const distance = offsetDistance * resolution;
+              const offsetCoord = this.calculateOffsetCoordinate(
+                this.lastHostPosition,
+                this.lastHostHeading,
+                distance
+              );
+              view.setCenter(offsetCoord);
+            }
+          } else {
+            view.setCenter(this.lastHostPosition);
+          }
+        }
+
+        this.map.render();
+        setTimeout(() => {
+          this.isIntentionalUpdate = false;
+        }, 0);
+      }
+    }
+  }
+
+  private calculateOffsetCoordinate(startCoord: Coordinate, bearing: number, distance: number): Coordinate {
+    const [lon, lat] = startCoord;
+    const bearingRad = (bearing * Math.PI) / 180;
+
+    // Calculate the offsets
+    const dx = distance * Math.sin(bearingRad);
+    const dy = distance * Math.cos(bearingRad);
+
+    // Apply the offsets to the starting coordinate
+    return [lon + dx, lat + dy];
+  }
+
+  private updateCompassRose(rotation: number) {
+    if (this.compassRose) {
+      if (this.centeringMode === CenteringMode.Center) {
+        // For north-up mode, reset the compass rose to its original orientation
+        this.renderer.setStyle(this.compassRose, 'transform', 'rotate(0rad)');
+      } else {
+        this.renderer.setStyle(
+          this.compassRose,
+          'transform',
+          `rotate(${rotation}rad)`
+        );
+      }
+    }
+  }
+
+  private updateRangeRings() {
+    if (!this.lastHostPosition) return;
+
+    const view = this.map.getView();
+    const extent = view.calculateExtent(this.map.getSize());
+    const [minLon, minLat, maxLon, maxLat] = extent;
+
+    // Calculate width in meters
+    const leftPoint = toLonLat([minLon, (minLat + maxLat) / 2]);
+    const rightPoint = toLonLat([maxLon, (minLat + maxLat) / 2]);
+    const widthMeters = getDistance(leftPoint, rightPoint);
+
+    // Convert width to miles
+    const widthMiles = widthMeters / 1609.34;
+
+    // Slightly reduce the range selection
+    const outerRange = this.rangeRings.find(range => range > widthMiles / 4) || this.rangeRings[this.rangeRings.length - 1];
+    const innerRange = outerRange / 2;
+
+    const source = this.rangeRingsLayer.getSource();
+    source?.clear();
+
+    [innerRange, outerRange].forEach((range, index) => {
+      const circle = new Circle(this.lastHostPosition!, range * 1609.34);
+      const feature = new Feature({
+        geometry: circle,
+        range: range,
+        isOuter: index === 1
+      });
+      source?.addFeature(feature);
+    });
+
+    // Force update of text positions
+    this.rangeRingsLayer.changed();
+    this.map.render();
+  }
+
+  private rangeRingStyle(feature: FeatureLike): Style[] {
+    const range = feature.get('range');
+    const isOuter = feature.get('isOuter');
+    const geometry = feature.getGeometry() as Circle;
+    const center = geometry.getCenter();
+    const radius = geometry.getRadius();
+
+    // Get the current map rotation
+    const rotation = this.map.getView().getRotation();
+
+    // Calculate the position for the text (always at the top of the screen)
+    const angle = Math.PI / 2 - rotation; // Subtract rotation to counteract map rotation
+    const textPosition = [
+      center[0] + Math.cos(angle) * radius,
+      center[1] + Math.sin(angle) * radius
+    ];
+
+    const circleStyle = new Style({
+      stroke: new Stroke({
+        color: 'rgba(255, 255, 255, 0.5)',
+        width: isOuter ? 2 : 1,
+      }),
+    });
+
+    const textStyle = new Style({
+      text: new Text({
+        text: `${range} mi`,
+        font: '12px sans-serif',
+        fill: new Fill({ color: 'white' }),
+        stroke: new Stroke({ color: 'black', width: 2 }),
+        textAlign: 'center',
+        textBaseline: 'bottom',
+        offsetY: -5,
+      }),
+      geometry: new Point(textPosition)
+    });
+
+    return [circleStyle, textStyle];
   }
 }
