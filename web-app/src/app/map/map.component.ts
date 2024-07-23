@@ -26,7 +26,6 @@ import { getDistance } from 'ol/sphere';
 
 enum CenteringMode {
   None,
-  Center,
   CenterWithHeading,
   CenterWithHeadingOffset
 }
@@ -56,14 +55,13 @@ export class MapComponent implements OnInit, OnDestroy {
   // private hostFeature: Feature<Point> | null = null;
   public isCentered: boolean = true;
   public centeringMode: CenteringMode = CenteringMode.CenterWithHeadingOffset;
-  public centeringIcon: string = 'navigation';
+  public centeringIcon: string = 'gps_off';
   public centerPosition: 'middle' | 'third' = 'third';
   private breadcrumbLayer!: WebGLPointsLayer<VectorSource<FeatureLike>>;
   public breadcrumbCount = 0; // Default to off
   private smoothFactor = 1; // Adjust this value to change smoothing (0-1)
   private currentPosition: Coordinate | null = null;
   private isIntentionalUpdate: boolean = false;
-  private compassRose: HTMLElement | null = null;
   private rangeRingsLayer!: VectorLayer<FeatureLike>;
   private rangeRings: number[] = [2, 5, 10, 20, 50, 100, 200, 500, 1000];
 
@@ -100,9 +98,6 @@ export class MapComponent implements OnInit, OnDestroy {
     this.resetPositions();
     this.initMap();
     this.subscribeToAircraftData();
-    this.toggleBreadcrumbs();
-    this.initCompassRose();
-
   }
 
   ngOnDestroy() {
@@ -233,10 +228,6 @@ export class MapComponent implements OnInit, OnDestroy {
 
   }
 
-  private initCompassRose() {
-    this.compassRose = this.elementRef.nativeElement.querySelector('#compass-rose');
-  }
-
   private subscribeToAircraftData() {
     this.hostSubscription = this.hostAircraftService.getAircraftData().subscribe(data => {
       if (data) {
@@ -335,17 +326,6 @@ export class MapComponent implements OnInit, OnDestroy {
     this.map.render();
   }
 
-  private smoothCenter(newCenter: Coordinate) {
-    const view = this.map.getView();
-    const currentCenter = view.getCenter()!;
-    const duration = 100; // match this with the aircraft animation duration
-
-    view.animate({
-      center: newCenter,
-      duration: duration
-    });
-  }
-
   resetPositions() {
     this.hostAircraftService.resetPosition().subscribe(() => {
       console.log('Host aircraft reset');
@@ -358,10 +338,6 @@ export class MapComponent implements OnInit, OnDestroy {
   toggleCentering() {
     switch (this.centeringMode) {
       case CenteringMode.None:
-        this.centeringMode = CenteringMode.Center;
-        this.centeringIcon = 'north';
-        break;
-      case CenteringMode.Center:
         this.centeringMode = CenteringMode.CenterWithHeading;
         this.centerPosition = 'middle';
         this.centeringIcon = 'navigation';
@@ -377,15 +353,9 @@ export class MapComponent implements OnInit, OnDestroy {
 
   toggleBreadcrumbs() {
     const counts = [0, 5, 10, 20, 50];
-    this.breadcrumbCount = counts[(counts.indexOf(this.breadcrumbCount) + 1) % counts.length];
+    const currentIndex = counts.indexOf(this.breadcrumbCount);
+    this.breadcrumbCount = counts[(currentIndex + 1) % counts.length];
     this.otherAircraftService.setBreadcrumbCount(this.breadcrumbCount);
-
-    console.log(`Breadcrumb count set to: ${this.breadcrumbCount}`);
-
-    if (!this.map) {
-      console.warn('Map not initialized yet');
-      return;
-    }
 
     if (this.breadcrumbCount > 0) {
       if (!this.breadcrumbLayer) {
@@ -487,31 +457,26 @@ export class MapComponent implements OnInit, OnDestroy {
       if (this.centeringMode !== CenteringMode.None) {
         this.isIntentionalUpdate = true;
 
-        if (this.centeringMode === CenteringMode.Center) {
-          view.setRotation(0); // Keep the map oriented north
-          view.setCenter(this.lastHostPosition);
-          this.updateCompassRose(0); // Update compass rose for north-up
-        } else {
-          const rotation = -this.lastHostHeading * Math.PI / 180;
-          view.setRotation(rotation);
-          this.updateCompassRose(rotation);
 
-          if (this.centeringMode === CenteringMode.CenterWithHeadingOffset && mapSize) {
-            const offsetDistance = mapSize[1] / 3; // 1/3 of the map height
-            const resolution = view.getResolution();
-            if (resolution) {
-              const distance = offsetDistance * resolution;
-              const offsetCoord = this.calculateOffsetCoordinate(
-                this.lastHostPosition,
-                this.lastHostHeading,
-                distance
-              );
-              view.setCenter(offsetCoord);
-            }
-          } else {
-            view.setCenter(this.lastHostPosition);
+        const rotation = -this.lastHostHeading * Math.PI / 180;
+        view.setRotation(rotation);
+
+        if (this.centeringMode === CenteringMode.CenterWithHeadingOffset && mapSize) {
+          const offsetDistance = mapSize[1] / 3; // 1/3 of the map height
+          const resolution = view.getResolution();
+          if (resolution) {
+            const distance = offsetDistance * resolution;
+            const offsetCoord = this.calculateOffsetCoordinate(
+              this.lastHostPosition,
+              this.lastHostHeading,
+              distance * 0.7
+            );
+            view.setCenter(offsetCoord);
           }
+        } else {
+          view.setCenter(this.lastHostPosition);
         }
+
 
         this.map.render();
         setTimeout(() => {
@@ -531,21 +496,6 @@ export class MapComponent implements OnInit, OnDestroy {
 
     // Apply the offsets to the starting coordinate
     return [lon + dx, lat + dy];
-  }
-
-  private updateCompassRose(rotation: number) {
-    if (this.compassRose) {
-      if (this.centeringMode === CenteringMode.Center) {
-        // For north-up mode, reset the compass rose to its original orientation
-        this.renderer.setStyle(this.compassRose, 'transform', 'rotate(0rad)');
-      } else {
-        this.renderer.setStyle(
-          this.compassRose,
-          'transform',
-          `rotate(${rotation}rad)`
-        );
-      }
-    }
   }
 
   private updateRangeRings() {

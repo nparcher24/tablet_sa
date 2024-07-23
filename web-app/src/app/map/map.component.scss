@@ -34,32 +34,22 @@
 
 .breadcrumb-button {
   position: relative;
-
-  .breadcrumb-badge {
-    position: absolute;
-    top: -8px;
-    right: -8px;
-    background-color: red;
-    color: white;
-    border-radius: 50%;
-    padding: 2px 6px;
-    font-size: 12px;
-    min-width: 18px;
-    height: 18px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
 }
 
-.compass-rose {
+.breadcrumb-badge {
   position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 60px;
-  height: 60px;
-  background-image: url('/assets/compass-rose.svg');
-  background-size: cover;
-  pointer-events: none;
-  transition: transform 0.3s ease;
+  top: -8px;
+  right: -8px;
+  background-color: red;
+  color: white;
+  border-radius: 10px;
+  padding: 1px 5px;
+  font-size: 10px;
+  min-width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  z-index: 1;
 }

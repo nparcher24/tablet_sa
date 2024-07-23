@@ -1,4 +1,4 @@
-import { ApplicationConfig } from '@angular/core';
+import { ApplicationConfig, importProvidersFrom } from '@angular/core';
 import { provideRouter } from '@angular/router';
 
 import { routes } from './app.routes';
@@ -7,8 +7,22 @@ import { provideHttpClient } from '@angular/common/http';
 import { HostAircraftService } from './services/host-aircraft.service';
 import { OtherAircraftService } from './services/other-aircraft.service';
 import { provideAnimations } from '@angular/platform-browser/animations';
+import { AngularFireModule } from '@angular/fire/compat';
+import { environment } from '../environments/environment.development';
+import { AngularFireAuthModule } from '@angular/fire/compat/auth';
 
 
 export const appConfig: ApplicationConfig = {
-  providers: [provideRouter(routes), provideAnimationsAsync(), provideHttpClient(), provideAnimations(), HostAircraftService, OtherAircraftService]
+  providers: [
+    provideRouter(routes),
+    provideAnimationsAsync(),
+    provideHttpClient(),
+    provideAnimations(),
+    HostAircraftService,
+    OtherAircraftService,
+    importProvidersFrom(
+      AngularFireModule.initializeApp(environment.firebase),
+      AngularFireAuthModule
+    )
+  ]
 };

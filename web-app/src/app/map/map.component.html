@@ -1,5 +1,4 @@
 <div id="map" class="map"></div>
-<div id="compass-rose" class="compass-rose"></div>
 <div class="button-container">
   <div class="left-buttons">
     <button
@@ -27,7 +26,7 @@
       }}</mat-icon>
     </button>
   </div>
-  
+
   <div class="spacer"></div>
 
   <button
@@ -37,6 +36,8 @@
     (click)="toggleBreadcrumbs()"
   >
     <mat-icon>more_horiz</mat-icon>
-    <span class="breadcrumb-badge">{{ breadcrumbCount }}</span>
   </button>
+  <span class="breadcrumb-badge" *ngIf="breadcrumbCount > 0">{{
+    breadcrumbCount
+  }}</span>
 </div>
