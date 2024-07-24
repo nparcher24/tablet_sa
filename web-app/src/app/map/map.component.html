@@ -1,4 +1,10 @@
 <div id="map" class="map"></div>
+<app-settings-menu></app-settings-menu>
+<app-range-rings
+  [map]="map"
+  [hostPosition]="lastHostPosition!"
+  [rotation]="mapRotation"
+></app-range-rings>
 <div class="button-container">
   <div class="left-buttons">
     <button
@@ -41,3 +47,13 @@
     breadcrumbCount
   }}</span>
 </div>
+
+<app-track-info
+  *ngIf="selectedTrack && trackInfoPosition"
+  [track]="selectedTrack"
+  [bullseyePosition]="bullseyePosition"
+  [style.top]="trackInfoPosition.top"
+  [style.left]="trackInfoPosition.left"
+  [style.zIndex]="9999"
+  style="position: absolute"
+></app-track-info>
