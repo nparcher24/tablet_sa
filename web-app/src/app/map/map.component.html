@@ -52,6 +52,7 @@
   *ngIf="selectedTrack && trackInfoPosition"
   [track]="selectedTrack"
   [bullseyePosition]="bullseyePosition"
+  [hostPosition]="lastHostPosition"
   [style.top]="trackInfoPosition.top"
   [style.left]="trackInfoPosition.left"
   [style.zIndex]="9999"

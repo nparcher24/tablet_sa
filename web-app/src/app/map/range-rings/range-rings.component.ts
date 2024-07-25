@@ -3,8 +3,8 @@ import { CommonModule } from '@angular/common';
 import { Feature, Map } from 'ol';
 import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
-import { Circle, LineString } from 'ol/geom';
-import { Style, Stroke, Text, Fill } from 'ol/style';
+import { Circle, LineString, Point } from 'ol/geom';
+import { Style, Stroke, Text, Fill, Icon } from 'ol/style';
 import { Coordinate } from 'ol/coordinate';
 import { FeatureLike } from 'ol/Feature';
 
@@ -72,6 +72,32 @@ export class RangeRingsComponent implements OnChanges, OnInit {
         isOuter: index === 1
       });
       source?.addFeature(feature);
+
+      // Add tick marks for the outer ring
+      if (index === 1) {
+        for (let i = 0; i < 360; i += 30) { // Tick every 30 degrees
+          const radians = (i * Math.PI) / 180;
+          const [x, y] = this.hostPosition!;
+          const centerPoint = [
+            x + Math.cos(radians) * range * 1852,
+            y + Math.sin(radians) * range * 1852
+          ];
+          const tickLength = range * 1852 * 0.04; // 4% of the radius
+          const startPoint = [
+            centerPoint[0] - Math.cos(radians) * tickLength / 2,
+            centerPoint[1] - Math.sin(radians) * tickLength / 2
+          ];
+          const endPoint = [
+            centerPoint[0] + Math.cos(radians) * tickLength / 2,
+            centerPoint[1] + Math.sin(radians) * tickLength / 2
+          ];
+          const tickFeature = new Feature({
+            geometry: new LineString([startPoint, endPoint]),
+            isTick: true
+          });
+          source?.addFeature(tickFeature);
+        }
+      }
     });
 
     this.addHeadingMarkers(outerRange);
@@ -86,6 +112,15 @@ export class RangeRingsComponent implements OnChanges, OnInit {
       return this.headingMarkerStyle(feature);
     }
 
+    if (feature.get('isTick')) {
+      return new Style({
+        stroke: new Stroke({
+          color: 'rgba(255, 255, 255, 0.7)',
+          width: 1,
+        }),
+      });
+    }
+
     const range = feature.get('range');
     const isOuter = feature.get('isOuter');
     const geometry = feature.getGeometry() as Circle;
@@ -94,8 +129,8 @@ export class RangeRingsComponent implements OnChanges, OnInit {
 
     const angle = Math.PI / 2 - this.rotation;
     const textPosition = [
-      center[0] + Math.cos(angle) * radius,
-      center[1] + Math.sin(angle) * radius
+      center[0] + Math.cos(angle) * radius * 0.9,
+      center[1] + Math.sin(angle) * radius * 0.9
     ];
 
     return [
@@ -112,10 +147,10 @@ export class RangeRingsComponent implements OnChanges, OnInit {
           fill: new Fill({ color: 'white' }),
           stroke: new Stroke({ color: 'black', width: 2 }),
           textAlign: 'center',
-          textBaseline: 'bottom',
-          offsetY: -5,
+          textBaseline: 'middle',
+          rotation: -this.rotation,
         }),
-        geometry: new Circle(textPosition, 0)
+        geometry: new Point(textPosition)
       })
     ];
   }
@@ -129,36 +164,42 @@ export class RangeRingsComponent implements OnChanges, OnInit {
         x + Math.cos(radians) * range * 1852,
         y + Math.sin(radians) * range * 1852
       ];
-      const line = new LineString([this.hostPosition!, endPoint]);
       const feature = new Feature({
-        geometry: line,
+        geometry: new Point(endPoint),
         heading: heading,
         isHeadingMarker: true
       });
       source?.addFeature(feature);
     }
   }
+
   private headingMarkerStyle(feature: any): Style {
     const heading = feature.get('heading');
-    const line = feature.getGeometry() as LineString;
-    const endPoint = line.getLastCoordinate();
+    const point = feature.getGeometry() as Point;
+    const coordinates = point.getCoordinates();
 
-    // Calculate the angle for text rotation
+    // Calculate the angle for text rotation and positioning
     const [startX, startY] = this.hostPosition!;
-    const [endX, endY] = endPoint;
+    const [endX, endY] = coordinates;
     const dx = endX - startX;
     const dy = endY - startY;
+    const angle = Math.atan2(dy, dx);
 
-    // Calculate the angle in radians, then convert to degrees
-    let angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+    // Calculate the distance from center to the tick mark
+    const distance = Math.sqrt(dx * dx + dy * dy);
 
-    // Adjust the angle to match the heading orientation
-    angleDeg = (180 - angleDeg) % 360;
+    // Calculate text position (3% further out than the tick mark)
+    const textDistance = distance * 1.07;
+    const textX = startX + Math.cos(angle) * textDistance;
+    const textY = startY + Math.sin(angle) * textDistance;
 
     return new Style({
-      stroke: new Stroke({
-        color: 'rgba(255, 255, 255, 0.5)',
-        width: 1,
+      image: new Icon({
+        src: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAKCAYAAAB10jRKAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAB3RJTUUH5AoTECERxyh2pwAAAB1pVFh0Q29tbWVudAAAAAAAQ3JlYXRlZCB3aXRoIEdJTVBkLmUHAAAAFklEQVQI12P4//8/AwMDAwMDAwMDAwAkBgMBvR7jugAAAABJRU5ErkJggg==',
+        anchor: [0.5, 1],
+        rotateWithView: true,
+        rotation: -this.rotation,
+        scale: [1, distance * 0.02]  // Scale tick mark to 2% of the radius
       }),
       text: new Text({
         text: heading.toString().padStart(3, '0'),
@@ -166,11 +207,9 @@ export class RangeRingsComponent implements OnChanges, OnInit {
         fill: new Fill({ color: 'white' }),
         stroke: new Stroke({ color: 'black', width: 2 }),
         textAlign: 'center',
-        textBaseline: 'bottom',
-        rotation: (angleDeg * Math.PI) / 180,  // Convert back to radians for rotation
-        offsetY: -5,
+        textBaseline: 'middle',
       }),
-      geometry: new Circle(endPoint, 0)
+      geometry: new Point([textX, textY])
     });
   }
 

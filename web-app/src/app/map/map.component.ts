@@ -23,6 +23,7 @@ import { SettingsMenuComponent } from './settings-menu/settings-menu.component';
 import CircleStyle from 'ol/style/Circle';
 import { BullseyeService } from '../services/bullseye.service';
 import { TrackInfoComponent } from './track-info/track-info.component';
+import { MapService } from '../services/map.service';
 
 
 enum CenteringMode {
@@ -42,7 +43,6 @@ enum CenteringMode {
 export class MapComponent implements OnInit, OnDestroy {
 
   public map!: OLMap;
-  private vectorLayer!: VectorLayer<Feature<Geometry>>;
   public CenteringMode = CenteringMode;
 
   // private hostAircraftLayer!: VectorLayer<Feature<Geometry>>;
@@ -53,7 +53,7 @@ export class MapComponent implements OnInit, OnDestroy {
   private firstHostUpdate = true;
   public lastHostPosition: Coordinate | null = null;
   private lastHostHeading: number | null = null;
-  // private hostFeature: Feature<Point> | null = null;
+  private isIntentionalUpdate: Boolean = false;
   public isCentered: boolean = true;
   public centeringMode: CenteringMode = CenteringMode.CenterWithHeadingOffset;
   public centeringIcon: string = 'gps_off';
@@ -62,199 +62,131 @@ export class MapComponent implements OnInit, OnDestroy {
   public breadcrumbCount = 0; // Default to off
   private smoothFactor = 1; // Adjust this value to change smoothing (0-1)
   private currentPosition: Coordinate | null = null;
-  private isIntentionalUpdate: boolean = false;
   public mapRotation: number = 0;
   private bullseyeFeature: Feature | null = null;
   private bullseyeLayer: VectorLayer<Feature<Geometry>> | null = null;
   selectedTrack: any | null = null;
+  private selectedTrackId: string | null = null;
   trackInfoPosition: { top: string, left: string, zIndex: string } | null = null;
   bullseyePosition: Coordinate | null = null;
-
-
-
-  private vectorSource110m = new VectorSource({
-    url: 'assets/maps/ne_110m_admin_0_countries.json',
-    format: new GeoJSON(),
-  });
-
-  private vectorSource50m = new VectorSource({
-    url: 'assets/maps/ne_50m_admin_0_countries.json',
-    format: new GeoJSON(),
-  });
-
-  private vectorSource10m = new VectorSource({
-    url: 'assets/maps/ne_10m_admin_0_countries.json',
-    format: new GeoJSON(),
-  });
-
   private mapMoveEndListener: any;
-  private mapPostRenderListener: any;
 
 
   constructor(
     private hostAircraftService: HostAircraftService,
     private otherAircraftService: OtherAircraftService,
-    private bullseyeService: BullseyeService
+    private bullseyeService: BullseyeService,
+    private mapService: MapService
   ) {
   }
 
+  // In map.component.ts
   ngOnInit() {
     this.resetPositions();
     this.initMap();
     this.subscribeToAircraftData();
-    this.initBullseyeLayer();
-    this.loadAndDisplayBullseye();
+    this.mapService.initBullseyeLayer();
+    this.mapService.loadAndDisplayBullseye();
     this.bullseyeService.bullseyeUpdated$.subscribe(() => {
-      this.loadAndDisplayBullseye();
+      this.mapService.loadAndDisplayBullseye();
     });
+
+    this.registerMapHandlers();
+  }
+
+  private registerMapHandlers() {
+    this.mapService.registerClickHandler(this.handleMapClick.bind(this));
+    this.mapService.registerPanHandler(this.handleMapPan.bind(this));
+  }
+
+  private handleMapClick(event: any) {
+    let featureClicked = false;
+    this.mapService.getMap().forEachFeatureAtPixel(event.pixel, (feature, layer) => {
+      if (layer === this.mapService.getOtherAircraftLayer() && (feature as any).get('isOtherAircraft')) {
+        const clickedTrackId = (feature as any).getId() as string;
+
+        if (this.selectedTrackId === clickedTrackId) {
+          this.deselectTrack();
+        } else {
+          if (this.selectedTrackId) {
+            this.deselectTrack();
+          }
+          this.selectTrack(clickedTrackId, feature as any);
+        }
+
+        featureClicked = true;
+        return true;
+      }
+      return false;
+    }, {
+      hitTolerance: 200,
+      layerFilter: (layer) => layer === this.mapService.getOtherAircraftLayer()
+    });
+
+    if (!featureClicked) {
+      this.deselectTrack();
+    }
+  }
+
+  private handleMapPan() {
+    if (!this.isIntentionalUpdate && this.centeringMode !== CenteringMode.None) {
+      this.disableAutoCentering();
+    }
+  }
+
+  private selectTrack(id: string, feature: Feature<Geometry>) {
+    this.selectedTrackId = id;
+    this.selectedTrack = feature.getProperties();
+
+    const geometry = feature.getGeometry();
+    if (geometry instanceof Point) {
+      const pixel = this.mapService.getMap().getPixelFromCoordinate(geometry.getCoordinates());
+      this.trackInfoPosition = { top: `${pixel[1]}px`, left: `${pixel[0]}px`, zIndex: '1000' };
+    }
+
+    this.mapService.selectTrack(feature);
+    this.bullseyePosition = this.mapService.getBullseyePosition();
+  }
+
+  private deselectTrack() {
+    this.mapService.deselectTrack();
+    this.selectedTrackId = null;
+    this.selectedTrack = null;
+    this.trackInfoPosition = null;
+  }
+
+  private disableAutoCentering() {
+    if (this.centeringMode !== CenteringMode.None) {
+      this.centeringMode = CenteringMode.None;
+      this.centeringIcon = 'gps_off';
+      console.log('Auto-centering disabled');
+    }
+  }
+
+  private updateTrackStyles() {
+    const source = this.mapService.getOtherAircraftLayer().getSource() as VectorSource;
+    source.getFeatures().forEach(feature => {
+      const id = feature.getId() as string;
+      if (id === this.selectedTrackId) {
+        feature.set('selected', true);
+      } else {
+        feature.set('selected', false);
+      }
+    });
+    this.mapService.getOtherAircraftLayer().changed();
   }
 
   ngOnDestroy() {
     this.hostSubscription.unsubscribe();
     this.otherSubscription.unsubscribe();
-    this.map.un('moveend', this.mapMoveEndListener);
+    this.mapService.getMap().un('moveend', this.mapMoveEndListener);
   }
 
   private initMap() {
-
-    let previousZoom = -1; // Holds the previous zoom level
-
-
-    this.vectorLayer = new VectorLayer({
-      source: this.vectorSource110m,
-      renderBuffer: 10000,
-      style: new Style({
-        stroke: new Stroke({
-          color: 'gray',
-          width: 1,
-        }),
-        fill: new Fill({
-          color: 'black',
-        }),
-      }),
-    });
-
-    this.map = new OLMap({
-      target: 'map',
-      layers: [this.vectorLayer],
-      controls: defaultControls({
-        attribution: false,
-        rotate: false,
-        zoom: false,
-      }),
-      view: new View({
-        center: [0, 0],
-        zoom: 2,
-      }),
-    });
-
-    // Add event listener for when the map stops moving
-    this.mapMoveEndListener = this.map.on('moveend', () => {
-
-      const currentZoom = this.map.getView().getZoom();
-
-      if (currentZoom !== previousZoom) {
-        previousZoom = currentZoom!;
-
-        // Determine which resolution to show based on the zoom level
-        if (currentZoom! <= 6) {
-          this.vectorLayer.setSource(this.vectorSource110m);
-        } else if (currentZoom! > 6 && currentZoom! <= 10) {
-          this.vectorLayer.setSource(this.vectorSource50m);
-        } else if (currentZoom! > 10) {
-          this.vectorLayer.setSource(this.vectorSource10m);
-        }
-      }
-    });
-
-
-    this.hostAircraftLayer = new WebGLPointsLayer({
-      source: new VectorSource(),
-      style: {
-        'icon-src': 'assets/host-aircraft.svg',
-        'icon-width': 50,
-        'icon-height': 50,
-        'icon-size': 0.5,
-        'icon-rotate-with-view': true,
-        'icon-rotation': ['get', 'heading'],
-        'icon-displacement': [0, 9],
-      },
-      disableHitDetection: true,
-    });
-
-    this.map.addLayer(this.hostAircraftLayer);
-
-
-    this.otherAircraftLayer = new WebGLPointsLayer({
-      source: new VectorSource(),
-      style: {
-        'icon-src': 'assets/other-aircraft.svg',
-        'icon-width': 25,
-        'icon-height': 25,
-        'icon-size': ['interpolate', ['linear'], ['get', 'size'], 0, 0, 20, 28],
-        'icon-rotate-with-view': true,
-        'icon-rotation': ['get', 'heading'],
-        'icon-displacement': [0, 9],
-      },
-      disableHitDetection: false,
-    });
-
-    this.map.addLayer(this.otherAircraftLayer);
-
-
-    // Ensure WebGL is initialized
-    this.map.once('postrender', () => {
-      this.map.renderSync();
-    });
-
-
-    this.map.getView().on('change:rotation', (event) => {
-      if (!this.isIntentionalUpdate && this.centeringMode !== CenteringMode.None && event.oldValue !== undefined) {
-        this.disableAutoCentering();
-      }
-      if (this.bullseyeFeature) {
-        const mapRotation = this.map.getView().getRotation();
-        this.bullseyeFeature.setStyle(this.getBullseyeStyle(mapRotation));
-        this.map.render();
-      }
-    });
-
-    this.map.on('pointerdrag', () => {
-      if (!this.isIntentionalUpdate && this.centeringMode !== CenteringMode.None) {
-        this.disableAutoCentering();
-      }
-    });
-
-    this.map.on('click', (event) => {
-      let featureClicked = false;
-      this.map.forEachFeatureAtPixel(event.pixel, (feature, layer) => {
-        if (layer === this.otherAircraftLayer && feature.get('isOtherAircraft')) {
-          this.selectedTrack = feature.getProperties();
-
-          const geometry = feature.getGeometry();
-          if (geometry instanceof Point) {
-            const pixel = this.map.getPixelFromCoordinate(geometry.getCoordinates());
-            this.trackInfoPosition = { top: `${pixel[1]}px`, left: `${pixel[0]}px`, zIndex: '1000' };
-          }
-          console.log("Position: ", this.trackInfoPosition)
-          featureClicked = true;
-          return true; // Stop iterating over features
-        }
-        return false; // Continue to the next feature
-      }, {
-        hitTolerance: 1000,
-        layerFilter: (layer) => layer === this.otherAircraftLayer
-      });
-
-      if (!featureClicked) {
-        this.selectedTrack = null;
-        this.trackInfoPosition = null;
-      }
-    });
-
+    this.map = this.mapService.initMap('map');
+    this.hostAircraftLayer = this.mapService.getHostAircraftLayer();
+    this.otherAircraftLayer = this.mapService.getOtherAircraftLayer();
   }
-
-
 
   private subscribeToAircraftData() {
     this.hostSubscription = this.hostAircraftService.getAircraftData().subscribe(data => {
@@ -305,31 +237,36 @@ export class MapComponent implements OnInit, OnDestroy {
 
 
     if (this.firstHostUpdate) {
-      this.map.getView().setZoom(7);
+      this.mapService.getMap().getView().setZoom(7);
       this.firstHostUpdate = false;
     }
 
     this.hostAircraftLayer.changed();
-    this.map.render();
+    this.mapService.getMap().render();
   }
 
   private updateOtherAircraft(data: OtherAircraftData[]) {
     const source = this.otherAircraftLayer.getSource() as VectorSource;
     const existingIds = new Set(source.getFeatures().map(f => f.getId()));
-  
+
     data.forEach(aircraft => {
       const id = `aircraft-${aircraft.id}`;
       let feature = source.getFeatureById(id) as Feature<Point> | null;
-  
+
+      // if (id === this.selectedTrackId) {
+      //   feature?.setStyle(this.getSelectedTrackStyle());
+      // }
+
       if (!feature) {
         feature = new Feature({
           geometry: new Point(fromLonLat([aircraft.longitude, aircraft.latitude])),
           heading: (aircraft.heading) * Math.PI / 180,
           breadcrumbs: aircraft.breadcrumbs,
           speed: aircraft.speed,
-          lastUpdateTime: Date.now()
+          lastUpdateTime: Date.now(),
+          selected: this.selectedTrackId === id,
+          isOtherAircraft: true
         });
-        feature.set('isOtherAircraft', true);
         feature.setId(id);
         source.addFeature(feature);
       } else {
@@ -339,8 +276,10 @@ export class MapComponent implements OnInit, OnDestroy {
         feature.set('breadcrumbs', aircraft.breadcrumbs, true);
         feature.set('speed', aircraft.speed, true);
         feature.set('lastUpdateTime', Date.now(), true);
+        feature.set('selected', this.selectedTrackId === id);
+
       }
-  
+
       existingIds.delete(id);
     });
 
@@ -353,7 +292,7 @@ export class MapComponent implements OnInit, OnDestroy {
     // Force re-render of the layer
     this.updateBreadcrumbs();
     this.otherAircraftLayer.changed();
-    this.map.render();
+    this.mapService.getMap().render();
   }
 
   resetPositions() {
@@ -399,7 +338,7 @@ export class MapComponent implements OnInit, OnDestroy {
 
   private removeBreadcrumbLayer() {
     if (this.map && this.breadcrumbLayer) {
-      this.map.removeLayer(this.breadcrumbLayer);
+      this.mapService.getMap().removeLayer(this.breadcrumbLayer);
       this.breadcrumbLayer = undefined!;
     }
   }
@@ -413,7 +352,7 @@ export class MapComponent implements OnInit, OnDestroy {
       },
       disableHitDetection: true,
     });
-    this.map.addLayer(this.breadcrumbLayer);
+    this.mapService.getMap().addLayer(this.breadcrumbLayer);
     console.log('Breadcrumb layer initialized');
   }
 
@@ -460,14 +399,6 @@ export class MapComponent implements OnInit, OnDestroy {
     this.breadcrumbLayer.changed();
   }
 
-  private disableAutoCentering() {
-    if (this.centeringMode !== CenteringMode.None) {
-      this.centeringMode = CenteringMode.None;
-      this.centeringIcon = 'gps_off';
-      console.log('Auto-centering disabled');
-    }
-  }
-
   toggleCenterPosition() {
     if (this.centeringMode === CenteringMode.CenterWithHeading) {
       this.centeringMode = CenteringMode.CenterWithHeadingOffset;
@@ -480,65 +411,7 @@ export class MapComponent implements OnInit, OnDestroy {
   }
 
   private updateMapView() {
-    if (this.lastHostPosition && this.lastHostHeading !== null) {
-      const view = this.map.getView();
-      const mapSize = this.map.getSize();
-
-      if (this.centeringMode !== CenteringMode.None) {
-        this.isIntentionalUpdate = true;
-
-
-        const rotation = -this.lastHostHeading * Math.PI / 180;
-        view.setRotation(rotation);
-        this.mapRotation = rotation; // Add this line
-
-
-        if (this.centeringMode === CenteringMode.CenterWithHeadingOffset && mapSize) {
-          const offsetDistance = mapSize[1] / 3; // 1/3 of the map height
-          const resolution = view.getResolution();
-          if (resolution) {
-            const distance = offsetDistance * resolution;
-            const offsetCoord = this.calculateOffsetCoordinate(
-              this.lastHostPosition,
-              this.lastHostHeading,
-              distance * 0.7
-            );
-            view.setCenter(offsetCoord);
-          }
-        } else {
-          view.setCenter(this.lastHostPosition);
-        }
-
-
-        this.map.render();
-        setTimeout(() => {
-          this.isIntentionalUpdate = false;
-        }, 0);
-      }
-    }
-  }
-
-  private calculateOffsetCoordinate(startCoord: Coordinate, bearing: number, distance: number): Coordinate {
-    const [lon, lat] = startCoord;
-    const bearingRad = (bearing * Math.PI) / 180;
-
-    // Calculate the offsets
-    const dx = distance * Math.sin(bearingRad);
-    const dy = distance * Math.cos(bearingRad);
-
-    // Apply the offsets to the starting coordinate
-    return [lon + dx, lat + dy];
-  }
-
-  private initBullseyeLayer() {
-    this.bullseyeLayer = new VectorLayer({
-      source: new VectorSource(),
-      style: (feature) => {
-        const mapRotation = this.map.getView().getRotation();
-        return this.getBullseyeStyle(mapRotation);
-      },
-    });
-    this.map.addLayer(this.bullseyeLayer);
+    this.mapService.updateMapView(this.lastHostPosition!, this.lastHostHeading!, this.centeringMode);
   }
 
   private getBullseyeStyle(rotation: number = 0): Style {
@@ -610,7 +483,7 @@ export class MapComponent implements OnInit, OnDestroy {
 
   private updateBullseyePosition(coordinates: Coordinate) {
     console.log('Updating bullseye position:', coordinates);
-    const mapRotation = this.map.getView().getRotation();
+    const mapRotation = this.mapService.getMap().getView().getRotation();
     const bullseyeStyle = this.getBullseyeStyle(mapRotation);
 
     if (!this.bullseyeFeature) {
@@ -624,7 +497,7 @@ export class MapComponent implements OnInit, OnDestroy {
       console.log('Bullseye feature updated');
     }
     this.bullseyeLayer?.changed();
-    this.map.render();
+    this.mapService.getMap().render();
 
     // Update the bullseyePosition property
     this.bullseyePosition = coordinates;

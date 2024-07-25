@@ -14,9 +14,8 @@ import { transform } from 'ol/proj';
     <mat-card class="track-info">
       <mat-card-content>
         <p>Bullseye: {{ bearingRange }}</p>
-        <p>HDG: {{ heading }}\u00B0</p>
-        <p>SPEED: {{speed}} KTS</p>
-        <p>Last update: {{ secondsSinceLastUpdate }}s ago</p>
+        <p>BRH: {{ brh }}</p>
+        <p>Mach: {{ mach.toFixed(2) }}</p>
       </mat-card-content>
     </mat-card>
   `,
@@ -35,12 +34,16 @@ import { transform } from 'ol/proj';
 export class TrackInfoComponent implements OnInit, OnDestroy {
   @Input() track: any;
   @Input() bullseyePosition: Coordinate | null = null;
+  @Input() hostPosition: Coordinate | null = null;
+
 
   secondsSinceLastUpdate: number = 0;
   bearingRange: string = '';
   speed: number = 0;
   heading: number = 0;
   trackId: string = '';
+  brh: string = '';
+  mach: number = 0;
 
   private updateSubscription: Subscription | null = null;
   private lastKnownUpdate: number = 0;
@@ -58,10 +61,9 @@ export class TrackInfoComponent implements OnInit, OnDestroy {
   }
 
   private updateInfo() {
-    if (this.track && this.bullseyePosition) {
+    if (this.track && this.hostPosition) {
       const currentTime = Date.now();
 
-      // Check if the track has been updated
       if (this.track !== this.lastKnownTrack) {
         this.lastKnownUpdate = currentTime;
         this.lastKnownTrack = this.track;
@@ -69,19 +71,25 @@ export class TrackInfoComponent implements OnInit, OnDestroy {
 
       this.secondsSinceLastUpdate = Math.floor((currentTime - this.lastKnownUpdate) / 1000);
 
-      this.speed = Math.round(this.track.speed);
-      this.heading = Math.round(this.track.heading * 180 / Math.PI); // Convert radians to degrees
-      this.trackId = this.track.id || 'Unknown';
-
-      // Get the track's coordinates from the geometry
       const trackCoords = (this.track.geometry as Point).getCoordinates();
-
-      // Transform both bullseye and track coordinates to geographic (EPSG:4326)
-      const bullseyeGeo = transform(this.bullseyePosition, 'EPSG:3857', 'EPSG:4326');
+      const hostGeo = transform(this.hostPosition, 'EPSG:3857', 'EPSG:4326');
       const trackGeo = transform(trackCoords, 'EPSG:3857', 'EPSG:4326');
 
-      const [bearing, range] = this.calculateBearingAndRange(bullseyeGeo, trackGeo);
-      this.bearingRange = `${bearing.toString().padStart(3, '0')}\u00B0/${range}`;
+      const [bearing, range] = this.calculateBearingAndRange(hostGeo, trackGeo);
+      const heading = Math.round(this.track.heading * 180 / Math.PI);
+      this.brh = `${bearing.toString().padStart(3, '0')}\u00B0/${range}NM/${heading.toString().padStart(3, '0')}\u00B0`;
+
+      if (this.bullseyePosition) {
+        const bullseyeGeo = transform(this.bullseyePosition, 'EPSG:3857', 'EPSG:4326');
+        const [bullseyeBearing, bullseyeRange] = this.calculateBearingAndRange(bullseyeGeo, trackGeo);
+        this.bearingRange = `${bullseyeBearing.toString().padStart(3, '0')}\u00B0/${bullseyeRange}NM`;
+      } else {
+        this.bearingRange = 'N/A';
+      }
+
+      // Calculate Mach number (assuming 25000 feet on a standard day)
+      const speedOfSound = 643.855; // Knots at 25000 feet
+      this.mach = this.track.speed / speedOfSound;
     } else {
       this.resetInfo();
     }
